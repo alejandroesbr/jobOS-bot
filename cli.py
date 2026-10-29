@@ -5,10 +5,13 @@ import sys
 from typing import Any
 
 import click
+from rich.markdown import Markdown
 
 from src.adapters.db.repository import ApplicationRepository
 from src.config_loader import load_filter_config
 from src.domain.models import ApplicationStatus, PortalName
+from src.services.assist_service import AssistService
+from src.services.career_service import CareerService
 from src.services.scan_service import ScanService
 from src.ui.console import (
     console,
@@ -55,7 +58,6 @@ def scan_cmd(portal_arg: str, limit_arg: int, headless: bool, db_path: str) -> N
     """Escanea portales de empleo de forma secuencial single-thread y registra postulaciones."""
     print_banner("jobOS-bot — Motor de Escaneo Multi-Portal", "Ejecución secuencial single-thread con graceful degradation")
 
-    # Determine portals to scan
     portals: list[PortalName] = []
     if portal_arg.lower().strip() == "all":
         portals = list(PortalName)
@@ -195,6 +197,81 @@ def export_cmd(export_format: str, output_arg: str | None, status_arg: str | Non
                     ])
 
         print_export_success(export_format, str(out_path), len(records))
+    finally:
+        repo.close()
+
+
+@cli.command(name="tailor")
+@click.argument("job_id", type=int)
+@click.option("--db-path", default="data/jobs.db", help="Ruta al archivo SQLite local.")
+def tailor_cmd(job_id: int, db_path: str) -> None:
+    """Optimiza tu CV para una vacante específica detectando la brecha de keywords ATS."""
+    repo = ApplicationRepository(db_path)
+    try:
+        service = CareerService(repository=repo)
+        analysis = service.tailor_cv(job_id)
+        print_banner(f"jobOS-bot — Adaptación Quirúrgica de CV (Vacante #{job_id})")
+        console.print(Markdown(analysis))
+    except Exception as ex:
+        print_error(str(ex))
+        sys.exit(1)
+    finally:
+        repo.close()
+
+
+@cli.command(name="prep")
+@click.argument("job_id", type=int)
+@click.option("--db-path", default="data/jobs.db", help="Ruta al archivo SQLite local.")
+def prep_cmd(job_id: int, db_path: str) -> None:
+    """Genera una guía técnica completa de entrevista (preguntas, live coding y preguntas para el entrevistador)."""
+    repo = ApplicationRepository(db_path)
+    try:
+        service = CareerService(repository=repo)
+        out_path = service.prepare_interview(job_id)
+        print_banner(f"jobOS-bot — Preparador de Entrevista Técnica (Vacante #{job_id})")
+        console.print(f"[bold green]Guía técnica generada con éxito en:[/bold green] [cyan]{out_path}[/cyan]")
+    except Exception as ex:
+        print_error(str(ex))
+        sys.exit(1)
+    finally:
+        repo.close()
+
+
+@cli.command(name="sync")
+@click.option("--db-path", default="data/jobs.db", help="Ruta al archivo SQLite local.")
+def sync_cmd(db_path: str) -> None:
+    """Sincroniza la base de datos local con Notion y detecta follow-ups estancados."""
+    print_banner("jobOS-bot — Sincronizador con Notion y Detección de Follow-ups")
+    repo = ApplicationRepository(db_path)
+    try:
+        service = CareerService(repository=repo)
+        report = service.sync_with_notion()
+        console.print(f"[green]• Vacantes nuevas enviadas a Notion (Push):[/green] {report.pushed_new}")
+        console.print(f"[blue]• Re-postulaciones actualizadas en Notion:[/blue] {report.updated_existing}")
+        console.print(f"[cyan]• Cambios de estado leídos desde Notion (Pull):[/cyan] {report.pulled_statuses}")
+        console.print(f"[magenta]• Guías técnicas generadas automáticamente:[/magenta] {report.interview_preps_triggered}")
+        console.print(f"[yellow]• Postulaciones marcadas para seguimiento (+7 días):[/yellow] {report.stalled_followups}")
+        if report.bootstrapped_from_notion > 0:
+            console.print(f"[bold green]• Vacantes restauradas desde Notion (Bootstrap Multi-PC):[/bold green] {report.bootstrapped_from_notion}")
+    except Exception as ex:
+        print_error(str(ex))
+        sys.exit(1)
+    finally:
+        repo.close()
+
+
+@cli.command(name="assist")
+@click.argument("url")
+@click.option("--db-path", default="data/jobs.db", help="Ruta al archivo SQLite local.")
+def assist_cmd(url: str, db_path: str) -> None:
+    """Abre el navegador en modo copiloto y autocompleta el formulario de postulación."""
+    repo = ApplicationRepository(db_path)
+    try:
+        service = AssistService(repository=repo)
+        service.run_assist(url)
+    except Exception as ex:
+        print_error(str(ex))
+        sys.exit(1)
     finally:
         repo.close()
 
