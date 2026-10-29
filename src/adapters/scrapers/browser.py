@@ -47,7 +47,8 @@ def create_browser_session(
                 headless=headless,
                 user_agent=DEFAULT_USER_AGENT,
                 viewport=DEFAULT_VIEWPORT,
-                locale="es-419,es;q=0.9,en;q=0.8",
+                locale="es-419",  # Un solo idioma principal
+                extra_http_headers={"Accept-Language": "es-419,es;q=0.9,en;q=0.8"}, # Aquí pasas ambos idiomas
                 timezone_id="America/Bogota",
                 args=["--disable-blink-features=AutomationControlled"],
             )
@@ -64,7 +65,8 @@ def create_browser_session(
             context_kwargs: dict[str, Any] = {
                 "user_agent": DEFAULT_USER_AGENT,
                 "viewport": DEFAULT_VIEWPORT,
-                "locale": "es-419,es;q=0.9,en;q=0.8",
+                "locale": "es-419", # Un solo idioma principal
+                "extra_http_headers": {"Accept-Language": "es-419,es;q=0.9,en;q=0.8"}, # Aquí pasas ambos idiomas
                 "timezone_id": "America/Bogota",
             }
             if state_file:
