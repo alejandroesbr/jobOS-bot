@@ -1,6 +1,6 @@
 # jobOS-bot — Plan Maestro de Implementación y Pruebas
 
-**Goal:** Construir `jobOS-bot` en **100% Python 3.11+** bajo **Lightweight Hexagonal Architecture (Ports & Adapters)** aplicando estrictamente **DRY, KISS, YAGNI y Clean Code (con tipado estricto estilo TypeScript)**, escaneo multi-portal _single-thread_, postulación por rango de `%` (`>= 40%`), re-postulación con contador único (`times_applied`) y ejecución Cloud a costo **\$0/mes**.
+**Goal:** Construir `jobOS-bot` en **100% Python 3.11+** bajo **Lightweight Hexagonal Architecture (Ports & Adapters)** aplicando estrictamente **DRY, KISS, YAGNI y Clean Code (con tipado estricto estilo TypeScript)**, escaneo multi-portal _single-thread_, postulación por rango de `%` (`>= 40%`), re-postulación con contador único (`times_applied`) y ejecución Cloud a costo **$0/mes**.
 **Done when:** Los 6 bloques están implementados, verificados uno por uno con `pytest` y pruebas de CLI en vivo (`scan`, `assist`, `stats`, `tailor`, `prep`, `sync`, `export`), sin código muerto ni duplicado.
 
 ## Constraints & Engineering Rules (Clean Code + DRY/KISS/YAGNI)
@@ -48,13 +48,13 @@
 - [x]   16. Implementar `scan_service.py`, interfaz `src/ui/console.py` (`Rich`) y comandos `auth`, `scan`, `stats`, `export` en `cli.py` — `src/services/scan_service.py`, `src/ui/console.py`, `cli.py`
 - [x]   17. **Prueba Bloque 5:** Verificar ejecución real de CLI (`python cli.py stats`, `python cli.py export`, `python cli.py scan --portal getonbrd --limit 5`)
 
-### Bloque 6: Copiloto `assist`, Gemini (`tailor` / `prep`), Notion Multi-PC (`sync`), Servidor MCP y Cloud \$0
+### Bloque 6: Copiloto `assist`, Gemini (`tailor` / `prep`), Notion Multi-PC (`sync`), Servidor MCP y Cloud $0
 
-- [ ]   18. Implementar `GeminiClient` (`src/adapters/ai/gemini_client.py`) y `NotionClient` (`src/adapters/notion/notion_client.py` con soporte de _bootstrap_ para clonar datos en otro PC) — `src/adapters/`
-- [ ]   19. Implementar `assist_service.py` (autocompletado con bordes verde/amarillo y pausa antes de Submit) y `career_service.py` (`tailor`, `prep`, `sync`, `followups`) — `src/services/`
-- [ ]   20. Implementar Servidor MCP (`src/adapters/mcp/server.py`) con 5 herramientas (`get_pipeline_overview`, `search_applications`, `get_market_stack_radar`, `prepare_job_application_kit`, `sync_pipeline_with_notion`) y sus tests — `src/adapters/mcp/server.py`, `tests/test_mcp_server.py`
-- [ ]   21. Crear `Dockerfile`, `docker-compose.yml` y workflows `.github/workflows/ci.yml` + `.github/workflows/scheduled_scan.yml` — `Dockerfile`, `.github/workflows/`
-- [ ]   22. **Prueba Bloque 6 (End-to-End):** Ejecutar suite completa `pytest` y validar comandos CLI (`tailor`, `prep`, `sync`, `assist`) y el servidor MCP (`python -m src.adapters.mcp.server`)
+- [x]   18. Implementar `GeminiClient` (`src/adapters/ai/gemini_client.py`) y `NotionClient` (`src/adapters/notion/notion_client.py` con soporte de _bootstrap_ para clonar datos en otro PC) — `src/adapters/`
+- [x]   19. Implementar `assist_service.py` (autocompletado con bordes verde/amarillo y pausa antes de Submit) y `career_service.py` (`tailor`, `prep`, `sync`, `followups`) — `src/services/`
+- [x]   20. Implementar Servidor MCP (`src/adapters/mcp/server.py`) con 5 herramientas (`get_pipeline_overview`, `search_applications`, `get_market_stack_radar`, `prepare_job_application_kit`, `sync_pipeline_with_notion`) y sus tests — `src/adapters/mcp/server.py`, `tests/test_mcp_server.py`
+- [x]   21. Crear `Dockerfile`, `docker-compose.yml` y workflows `.github/workflows/ci.yml` + `.github/workflows/scheduled_scan.yml` — `Dockerfile`, `.github/workflows/`
+- [x]   22. **Prueba Bloque 6 (End-to-End):** Ejecutar suite completa `pytest` y validar comandos CLI (`tailor`, `prep`, `sync`, `assist`) y el servidor MCP (`python -m src.adapters.mcp.server`)
 
 ## Log
 
@@ -64,3 +64,4 @@
 - 2026-10-28 — **Bloque 3 completado y verificado** en rama `feature/block-3-sqlite-repository` (`27 passed` en `pytest` y `mypy --strict` sin errores en 15 archivos).
 - 2026-10-28 — **Bloque 4 completado y verificado** en rama `feature/block-4-qa-fuzzy-engine` (`41 passed` en `pytest` y `mypy --strict` sin errores en 17 archivos).
 - 2026-10-28 — **Bloque 5 completado y verificado** en rama `feature/block-5-multiportal-scrapers` (`50 passed` en `pytest`, comandos CLI en vivo validados y `mypy --strict` sin errores en 32 archivos).
+- 2026-10-28 — **Bloque 6 completado y verificado** en rama `feature/block-6-ai-notion-mcp-cloud` (`65 passed` en `pytest`, Servidor MCP con 5 herramientas, Copiloto assist, Gemini offline-safe, Notion multi-PC bootstrap, Docker/GitHub Actions y `mypy --strict` sin errores en 44 archivos).

@@ -1,0 +1,63 @@
+name: Scheduled Multi-Portal Scan & Notion Sync
+
+on:
+  schedule:
+    # Runs at 13:00, 19:00, 01:00 UTC (8:00 AM, 2:00 PM, 8:00 PM Colombia Time)
+    - cron: "0 13,19,1 * * *"
+  workflow_dispatch:
+
+jobs:
+  scan-and-sync:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies & Playwright browsers
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          playwright install chromium --with-deps
+
+      - name: Restore SQLite Database Cache
+        uses: actions/cache@v4
+        with:
+          path: data/jobs.db
+          key: jobos-db-${{ github.run_id }}
+          restore-keys: |
+            jobos-db-
+
+      - name: Setup session cookies if available
+        if: env.PLAYWRIGHT_STORAGE_STATE != ''
+        env:
+          PLAYWRIGHT_STORAGE_STATE: ${{ secrets.PLAYWRIGHT_STORAGE_STATE }}
+        run: |
+          mkdir -p data
+          echo "$PLAYWRIGHT_STORAGE_STATE" > data/storage_state.json
+
+      - name: Run multi-portal scan (single-thread)
+        env:
+          HEADLESS: "true"
+        run: |
+          python cli.py scan --portal all --limit 10
+
+      - name: Sync with Notion CRM
+        env:
+          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+          NOTION_DATABASE_ID: ${{ secrets.NOTION_DATABASE_ID }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          python cli.py sync
+
+      - name: Save SQLite Database Cache
+        uses: actions/cache@v4
+        with:
+          path: data/jobs.db
+          key: jobos-db-${{ github.run_id }}
