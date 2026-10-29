@@ -314,12 +314,31 @@ def auth_cmd(portal: str | None, output_path: str | None) -> None:
     )
 
     with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(headless=False)
-        context = browser.new_context()
+        browser = playwright.chromium.launch(
+            headless=False,
+            args=[
+                "--disable-blink-features=AutomationControlled",
+                "--no-sandbox",
+                "--disable-infobars",
+            ],
+        )
+        context = browser.new_context(
+            user_agent=(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/133.0.0.0 Safari/537.36"
+            ),
+            viewport={"width": 1280, "height": 800},
+            locale="es-419",
+            extra_http_headers={"Accept-Language": "es-419,es;q=0.9,en;q=0.8"},
+            timezone_id="America/Bogota",
+        )
+        context.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
         page = context.new_page()
 
         console.print(f"[green]Navegador abierto en:[/green] [cyan]{target_url}[/cyan]")
         console.print("[yellow]Inicia sesión (resuelve Captcha o 2FA si aplica) y luego presiona ENTER en esta terminal...[/yellow]")
+        console.print("[dim cyan]💡 Tip: Si el portal te muestra 'Couldn't sign you in' con Google, ingresa con correo y contraseña directa del portal.[/dim cyan]")
 
         page.goto(target_url)
         input()
