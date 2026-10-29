@@ -94,3 +94,4 @@ def load_filter_config(config_path: Path | str = "config/filters.yaml") -> Filte
         location_whitelist=_extract_string_tuple(raw_data, "location_whitelist"),
         tech_vocabulary=tech_vocabulary,
     )
+

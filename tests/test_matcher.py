@@ -187,3 +187,4 @@ def test_matcher_generates_correct_dedup_key_and_canonical_url(matcher: OfferMat
 
     assert evaluation.dedup_key == "techcorp::desarrollador full stack junior react node"
     assert evaluation.canonical_url == "https://www.linkedin.com/jobs/view/99999"
+
