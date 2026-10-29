@@ -229,3 +229,30 @@ def test_qa_memory_upsert_and_retrieve(repo: ApplicationRepository) -> None:
     updated_qa = repo.get_all_qa_memory()
     assert len(updated_qa) == 1
     assert updated_qa[0][2] == "3 años demostrables en portafolio y proyectos"
+
+
+def test_insert_or_ignore_keywords_does_not_raise_on_duplicate_association(
+    repo: ApplicationRepository,
+) -> None:
+    offer1, eval1 = _make_sample_offer(PortalName.LINKEDIN, "https://linkedin.com/duplicate-kw-1")
+    record, applied = repo.record_submission(offer1, eval1, applied_at="2026-10-28T10:00:00Z")
+    assert applied is True
+    assert len(record.keywords) == 4
+
+    # Re-apply on another portal with the same evaluation keywords (cooldown doesn't apply to different portals)
+    offer2 = JobOffer(
+        portal=PortalName.GETONBRD,
+        title=offer1.title,
+        company=offer1.company,
+        location=offer1.location,
+        modality=offer1.modality,
+        url="https://getonbrd.com/duplicate-kw-2",
+        description=offer1.description,
+    )
+    # This invokes _update_existing_reapplication which re-inserts keywords with INSERT OR IGNORE
+    reapplied_record, reapplied = repo.record_submission(offer2, eval1, applied_at="2026-10-28T11:00:00Z")
+    assert reapplied is True
+    assert reapplied_record.times_applied == 2
+    # Keywords are still cleanly intact without exceptions
+    assert len(reapplied_record.keywords) == 4
+

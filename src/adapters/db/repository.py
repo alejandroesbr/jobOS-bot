@@ -181,7 +181,7 @@ class ApplicationRepository:
             if evaluation.keywords:
                 self._conn.executemany(
                     """
-                    INSERT INTO application_keywords (application_id, keyword, is_matched, weight)
+                    INSERT OR IGNORE INTO application_keywords (application_id, keyword, is_matched, weight)
                     VALUES (?, ?, ?, ?)
                     """,
                     [
@@ -234,6 +234,18 @@ class ApplicationRepository:
                     timestamp,
                 ),
             )
+
+            if evaluation.keywords:
+                self._conn.executemany(
+                    """
+                    INSERT OR IGNORE INTO application_keywords (application_id, keyword, is_matched, weight)
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    [
+                        (existing.id, kw.keyword, 1 if kw.is_matched else 0, int(kw.weight))
+                        for kw in evaluation.keywords
+                    ],
+                )
 
         updated_record = self.find_by_id(existing.id)
         if not updated_record:
