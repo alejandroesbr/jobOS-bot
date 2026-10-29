@@ -62,4 +62,4 @@
 - 2026-10-28 — **Bloque 1 completado y verificado** en rama `feature/block-1-domain-normalizer` (`11 passed` en `pytest` y `mypy --strict` sin errores).
 - 2026-10-28 — **Bloque 2 completado y verificado** en rama `feature/block-2-matcher-scoring` (`20 passed` en `pytest` y `mypy --strict` sin errores en 12 archivos).
 - 2026-10-28 — **Bloque 3 completado y verificado** en rama `feature/block-3-sqlite-repository` (`27 passed` en `pytest` y `mypy --strict` sin errores en 15 archivos).
-- 2026-10-28 — **Bloque 4 completado y verificado** en rama `feature/block-4-qa-engine-rapidfuzz` (`41 passed` en `pytest` y `mypy --strict` sin errores en 17 archivos).
+- 2026-10-28 — **Bloque 4 completado y verificado** en rama `feature/block-4-qa-fuzzy-engine` (`41 passed` en `pytest` y `mypy --strict` sin errores en 17 archivos).
