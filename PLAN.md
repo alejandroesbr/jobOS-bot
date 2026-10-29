@@ -31,9 +31,9 @@
 
 ### Bloque 3: Persistencia SQLite y Re-Postulación con Contador Único (`times_applied`)
 
-- [ ]   8. Crear esquema DDL en `src/adapters/db/schema.sql` (`applications` con `dedup_key UNIQUE`, `times_applied`, `submission_history`, `qa_memory`, `keyword_stats`) — `src/adapters/db/schema.sql`
-- [ ]   9. Implementar `ApplicationRepository` en `src/adapters/db/repository.py` con SQL parametrizado, regla `should_reapply()` y `UPSERT` que incrementa `times_applied` sin duplicar registros — `src/adapters/db/repository.py`
-- [ ]   10. **Prueba Bloque 3:** Probar en SQLite `:memory:` primera postulación (`times_applied=1`), re-postulación en otro portal (`times_applied=2`), bloqueo durante cooldown y congelamiento en estado _Entrevista_ — verificar con `pytest tests/test_repository.py -v`
+- [x]   8. Crear esquema DDL en `src/adapters/db/schema.sql` (`applications` con `dedup_key UNIQUE`, `times_applied`, `submission_history`, `qa_memory`, `keyword_stats`) — `src/adapters/db/schema.sql`
+- [x]   9. Implementar `ApplicationRepository` en `src/adapters/db/repository.py` con SQL parametrizado, regla `should_reapply()` y `UPSERT` que incrementa `times_applied` sin duplicar registros — `src/adapters/db/repository.py`
+- [x]   10. **Prueba Bloque 3:** Probar en SQLite `:memory:` primera postulación (`times_applied=1`), re-postulación en otro portal (`times_applied=2`), bloqueo durante cooldown y congelamiento en estado _Entrevista_ — verificar con `pytest tests/test_repository.py -v`
 
 ### Bloque 4: Motor de Memoria Difusa para Formularios (`qa_engine` + `RapidFuzz`)
 
@@ -61,3 +61,4 @@
 - 2026-10-28 — Definida arquitectura modular en `docs/arquitectura/` (00 al 10), lógica de negocio en `docs/logica-negocio/` (01 al 05) y base de datos 3FN en `docs/base-de-datos/` (01 al 03) bajo principios Clean Code, tipado estricto estilo TypeScript, DRY, KISS y YAGNI.
 - 2026-10-28 — **Bloque 1 completado y verificado** en rama `feature/block-1-domain-normalizer` (`11 passed` en `pytest` y `mypy --strict` sin errores).
 - 2026-10-28 — **Bloque 2 completado y verificado** en rama `feature/block-2-matcher-scoring` (`20 passed` en `pytest` y `mypy --strict` sin errores en 12 archivos).
+- 2026-10-28 — **Bloque 3 completado y verificado** en rama `feature/block-3-sqlite-repository` (`27 passed` en `pytest` y `mypy --strict` sin errores en 15 archivos).
