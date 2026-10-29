@@ -55,6 +55,55 @@ class AnswerSource(StrEnum):
 
 
 @dataclass(frozen=True, slots=True)
+class CandidatePersonalInfo:
+    full_name: str
+    email: str
+    phone: str
+    city: str
+    country: str
+    linkedin_url: str
+    github_url: str
+    portfolio_url: str
+
+
+@dataclass(frozen=True, slots=True)
+class CandidatePreferences:
+    residency: str
+    colombia_work_permit: bool
+    requires_visa_sponsorship: bool
+    remote_availability: bool
+    hybrid_availability: bool
+    notice_period: str
+    english_level: str
+
+
+@dataclass(frozen=True, slots=True)
+class CandidateSalary:
+    cop_monthly: int
+    cop_monthly_min: int
+    cop_monthly_max: int
+    usd_monthly: int
+    usd_monthly_min: int
+    usd_monthly_max: int
+
+
+@dataclass(frozen=True, slots=True)
+class CandidateProfile:
+    personal: CandidatePersonalInfo
+    preferences: CandidatePreferences
+    salary: CandidateSalary
+    experience_years: dict[str, int]
+    default_floor_years: int = 1
+
+    def get_experience_years(self, tech_name: str) -> int:
+        target = tech_name.strip().lower()
+        for tech, years in self.experience_years.items():
+            if tech.strip().lower() == target:
+                return years
+        return self.default_floor_years
+
+
+@dataclass(frozen=True, slots=True)
 class JobOffer:
     portal: PortalName
     title: str
@@ -130,4 +179,3 @@ class QuestionMatch:
     category: QuestionCategory
     source: AnswerSource
     is_confident_match: bool
-

@@ -1,0 +1,52 @@
+# Candidate Personal Profile and ATS Form Configuration
+personal:
+  full_name: "Alejandro Gómez"
+  email: "alejandro.developer@example.com"
+  phone: "+57 300 123 4567"
+  city: "Barranquilla"
+  country: "Colombia"
+  linkedin_url: "https://www.linkedin.com/in/alejandro-dev"
+  github_url: "https://github.com/alejandro-dev"
+  portfolio_url: "https://alejandro-dev.io"
+
+preferences:
+  residency: "Barranquilla, Colombia"
+  colombia_work_permit: true
+  requires_visa_sponsorship: false
+  remote_availability: true
+  hybrid_availability: true
+  notice_period: "Inmediata"
+  english_level: "B2 - Profesional Intermedio"
+
+salary:
+  cop_monthly: 3800000
+  cop_monthly_min: 3500000
+  cop_monthly_max: 4500000
+  usd_monthly: 1500
+  usd_monthly_min: 1200
+  usd_monthly_max: 2000
+
+experience:
+  default_floor_years: 1
+  technologies:
+    React: 2
+    Node.js: 2
+    NestJS: 1
+    TypeScript: 2
+    JavaScript: 3
+    PostgreSQL: 2
+    SQL: 2
+    Git: 3
+    Next.js: 1
+    Express: 2
+    Prisma: 1
+    TypeORM: 1
+    Docker: 1
+    REST API: 2
+    Tailwind: 2
+    HTML: 3
+    CSS: 3
+    AWS: 1
+    Redis: 1
+    GraphQL: 1
+    CI/CD: 1

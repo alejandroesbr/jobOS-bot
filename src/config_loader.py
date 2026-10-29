@@ -2,7 +2,13 @@ from dataclasses import dataclass
 from pathlib import Path
 import yaml
 
-from src.domain.models import KeywordWeight
+from src.domain.models import (
+    CandidatePersonalInfo,
+    CandidatePreferences,
+    CandidateProfile,
+    CandidateSalary,
+    KeywordWeight,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -95,3 +101,74 @@ def load_filter_config(config_path: Path | str = "config/filters.yaml") -> Filte
         tech_vocabulary=tech_vocabulary,
     )
 
+
+def load_candidate_profile(config_path: Path | str = "config/profile.yaml") -> CandidateProfile:
+    path = Path(config_path)
+    if not path.is_file():
+        fallback_path = path.parent / "profile.example.yaml"
+        if fallback_path.is_file():
+            path = fallback_path
+        else:
+            raise FileNotFoundError(
+                f"Candidate profile configuration file not found at: {path} (fallback: {fallback_path})"
+            )
+
+    with path.open("r", encoding="utf-8") as file:
+        raw_data = yaml.safe_load(file)
+
+    if not isinstance(raw_data, dict):
+        raise ValueError(f"Invalid profile format in {path}: expected dictionary root.")
+
+    personal_raw = raw_data.get("personal", {})
+    personal_dict = personal_raw if isinstance(personal_raw, dict) else {}
+    personal = CandidatePersonalInfo(
+        full_name=str(personal_dict.get("full_name", "")),
+        email=str(personal_dict.get("email", "")),
+        phone=str(personal_dict.get("phone", "")),
+        city=str(personal_dict.get("city", "")),
+        country=str(personal_dict.get("country", "")),
+        linkedin_url=str(personal_dict.get("linkedin_url", "")),
+        github_url=str(personal_dict.get("github_url", "")),
+        portfolio_url=str(personal_dict.get("portfolio_url", "")),
+    )
+
+    pref_raw = raw_data.get("preferences", {})
+    pref_dict = pref_raw if isinstance(pref_raw, dict) else {}
+    preferences = CandidatePreferences(
+        residency=str(pref_dict.get("residency", "Barranquilla, Colombia")),
+        colombia_work_permit=bool(pref_dict.get("colombia_work_permit", True)),
+        requires_visa_sponsorship=bool(pref_dict.get("requires_visa_sponsorship", False)),
+        remote_availability=bool(pref_dict.get("remote_availability", True)),
+        hybrid_availability=bool(pref_dict.get("hybrid_availability", True)),
+        notice_period=str(pref_dict.get("notice_period", "Inmediata")),
+        english_level=str(pref_dict.get("english_level", "B2")),
+    )
+
+    salary_raw = raw_data.get("salary", {})
+    salary_dict = salary_raw if isinstance(salary_raw, dict) else {}
+    salary = CandidateSalary(
+        cop_monthly=int(salary_dict.get("cop_monthly", 3800000)),
+        cop_monthly_min=int(salary_dict.get("cop_monthly_min", 3500000)),
+        cop_monthly_max=int(salary_dict.get("cop_monthly_max", 4500000)),
+        usd_monthly=int(salary_dict.get("usd_monthly", 1500)),
+        usd_monthly_min=int(salary_dict.get("usd_monthly_min", 1200)),
+        usd_monthly_max=int(salary_dict.get("usd_monthly_max", 2000)),
+    )
+
+    exp_raw = raw_data.get("experience", {})
+    exp_dict = exp_raw if isinstance(exp_raw, dict) else {}
+    default_floor_years = int(exp_dict.get("default_floor_years", 1))
+
+    tech_dict = exp_dict.get("technologies", {})
+    experience_years: dict[str, int] = {}
+    if isinstance(tech_dict, dict):
+        for tech, years in tech_dict.items():
+            experience_years[str(tech)] = int(years)
+
+    return CandidateProfile(
+        personal=personal,
+        preferences=preferences,
+        salary=salary,
+        experience_years=experience_years,
+        default_floor_years=default_floor_years,
+    )

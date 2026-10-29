@@ -37,9 +37,9 @@
 
 ### Bloque 4: Motor de Memoria Difusa para Formularios (`qa_engine` + `RapidFuzz`)
 
-- [ ]   11. Crear plantillas `config/profile.example.yaml` y `config/cv_base.example.md` — `config/`
-- [ ]   12. Implementar `QuestionAnswerEngine` en `src/domain/qa_engine.py` (similitud `RapidFuzz >= 85%`, detección de moneda salarial `COP` vs `USD` y semilla inicial desde `profile.yaml`) — `src/domain/qa_engine.py`
-- [ ]   13. **Prueba Bloque 4:** Crear y ejecutar tests de similitud difusa y reglas ATS de salario/experiencia — verificar con `pytest tests/test_qa_engine.py -v`
+- [x]   11. Crear plantillas `config/profile.example.yaml` y `config/cv_base.example.md` — `config/`
+- [x]   12. Implementar `QuestionAnswerEngine` en `src/domain/qa_engine.py` (similitud `RapidFuzz >= 85%`, detección de moneda salarial `COP` vs `USD` y semilla inicial desde `profile.yaml`) — `src/domain/qa_engine.py`
+- [x]   13. **Prueba Bloque 4:** Crear y ejecutar tests de similitud difusa y reglas ATS de salario/experiencia — verificar con `pytest tests/test_qa_engine.py -v`
 
 ### Bloque 5: Scrapers Multi-Portal Single-Thread y CLI con `Rich`
 
@@ -62,3 +62,4 @@
 - 2026-10-28 — **Bloque 1 completado y verificado** en rama `feature/block-1-domain-normalizer` (`11 passed` en `pytest` y `mypy --strict` sin errores).
 - 2026-10-28 — **Bloque 2 completado y verificado** en rama `feature/block-2-matcher-scoring` (`20 passed` en `pytest` y `mypy --strict` sin errores en 12 archivos).
 - 2026-10-28 — **Bloque 3 completado y verificado** en rama `feature/block-3-sqlite-repository` (`27 passed` en `pytest` y `mypy --strict` sin errores en 15 archivos).
+- 2026-10-28 — **Bloque 4 completado y verificado** en rama `feature/block-4-qa-engine-rapidfuzz` (`41 passed` en `pytest` y `mypy --strict` sin errores en 17 archivos).
