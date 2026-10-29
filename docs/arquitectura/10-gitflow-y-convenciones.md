@@ -65,3 +65,4 @@ Siguiendo las reglas de `ai-code-gen-guidelines`, todos los mensajes de commit s
 * `refactor`: Mejora de código aplicando DRY/KISS sin alterar el comportamiento externo.
 * `fix`: Corrección de un bug o selector DOM.
 * `chore` / `ci`: Configuración de entorno, `.gitignore`, `Dockerfile` o workflows de GitHub Actions.
+
