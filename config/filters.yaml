@@ -1,5 +1,4 @@
 # Configuration for job filtering, scoring weights, and search rules
-# Tailored for Ancizar Alejandro Escobar Estupiñán - Junior Backend Developer
 matching:
   min_match_score: 40
   reapply_cooldown_days: 3
@@ -9,30 +8,26 @@ candidate_profile:
   skills:
     - Python
     - FastAPI
-    - TypeScript
     - Node.js
     - Express
-    - PostgreSQL
-    - SQLAlchemy
-    - Docker
+    - TypeScript
     - JavaScript
-    - SQL
+    - PostgreSQL
     - MySQL
+    - SQL
+    - SQLAlchemy
     - Sequelize
-    - REST API
-    - JWT
-    - Alembic
+    - Docker
     - Docker Compose
+    - Alembic
     - Git
     - GitHub
+    - REST API
+    - JWT
     - Linux
-    - VS Code
     - Postman
-    - SOLID
-    - MVC
-    - Agile
     - Scrum
-    - Testing
+    - Agile
 
 title_blacklist:
   - senior
@@ -67,33 +62,29 @@ title_blacklist:
   - "android nativo"
 
 title_whitelist:
-  - backend
-  - junior backend
-  - backend developer
+  - junior
+  - jr
+  - entry level
+  - trainee
+  - associate
   - desarrollador backend
+  - backend developer
+  - backend
   - python developer
   - desarrollador python
   - node developer
   - desarrollador node
-  - full stack
+  - desarrollador full stack
+  - full stack developer
   - fullstack
-  - fullstack developer
-  - desarrollador fullstack
-  - frontend
-  - frontend developer
-  - desarrollador frontend
-  - ai engineer
-  - ingenierio de ia
+  - desarrollador junior
   - software engineer
   - junior software engineer
-  - software developer
-  - desarrollador de software
-  - desarrollador junior
-  - junior developer
-  - entry level
-  - trainee
-  - associate
   - programador
+  - desarrollador web
+  - web developer
+  - ingeniero de desarrollo
+  - ingeniero de sistemas
 
 company_blacklist:
   - "Spam Staffing LLC"
@@ -107,6 +98,8 @@ location_whitelist:
   - atlántico
   - colombia
   - latam
+  - híbrido
+  - hibrido
 
 tech_vocabulary:
   core:
@@ -114,46 +107,44 @@ tech_vocabulary:
     keywords:
       - Python
       - FastAPI
-      - TypeScript
       - Node.js
-      - Express
+      - TypeScript
       - PostgreSQL
       - SQLAlchemy
-      - Docker
+      - Express
+      - REST API
 
   secondary:
     weight: 2
     keywords:
       - JavaScript
+      - Sequelize
       - SQL
       - MySQL
-      - Sequelize
-      - REST API
-      - JWT
-      - Alembic
+      - Docker
       - Docker Compose
+      - Alembic
       - Git
-      - GitHub
+      - JWT
       - Linux
+      - Postman
 
   bonus:
     weight: 1
     keywords:
-      - CI/CD
-      - Testing
-      - Pytest
-      - Jest
-      - Postman
       - Redis
       - MongoDB
       - AWS
-      - Scrum
-      - Agile
-      - SOLID
-      - MVC
-      - Architecture
+      - CI/CD
       - React
       - Next.js
-      - NestJS
+      - Tailwind
+      - HTML
+      - CSS
+      - Scrum
+      - Agile
+      - Jest
+      - Pytest
       - Kubernetes
-      - Kafka
+      - Microservices
+      - GraphQL
