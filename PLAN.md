@@ -25,9 +25,9 @@
 
 ### Bloque 2: Motor de Scoring (`Match >= 40%`) y Configuración Declarativa
 
-- [ ]   5. Crear `config/filters.yaml` (whitelists/blacklists, pesos Core/Secundario/Complementario, umbral `min_match_score: 40`, `reapply_cooldown_days`) y cargador tipado — `config/filters.yaml`, `src/config_loader.py`
-- [ ]   6. Implementar `OfferMatcher` en `src/domain/matcher.py` (evaluación de _Hard Rejects_, cálculo ponderado de `%`, piso para ofertas cortas y detección de `matched_keywords` vs `missing_keywords`) — `src/domain/matcher.py`
-- [ ]   7. **Prueba Bloque 2:** Crear y ejecutar tests unitarios cubriendo rechazo duro, postulación parcial (`40%–69%`) y match ideal (`>= 70%`) — verificar con `pytest tests/test_matcher.py -v`
+- [x]   5. Crear `config/filters.yaml` (whitelists/blacklists, pesos Core/Secundario/Complementario, umbral `min_match_score: 40`, `reapply_cooldown_days`) y cargador tipado — `config/filters.yaml`, `src/config_loader.py`
+- [x]   6. Implementar `OfferMatcher` en `src/domain/matcher.py` (evaluación de _Hard Rejects_, cálculo ponderado de `%`, piso para ofertas cortas y detección de `matched_keywords` vs `missing_keywords`) — `src/domain/matcher.py`
+- [x]   7. **Prueba Bloque 2:** Crear y ejecutar tests unitarios cubriendo rechazo duro, postulación parcial (`40%–69%`) y match ideal (`>= 70%`) — verificar con `pytest tests/test_matcher.py -v`
 
 ### Bloque 3: Persistencia SQLite y Re-Postulación con Contador Único (`times_applied`)
 
@@ -60,3 +60,4 @@
 
 - 2026-10-28 — Definida arquitectura modular en `docs/arquitectura/` (00 al 10), lógica de negocio en `docs/logica-negocio/` (01 al 05) y base de datos 3FN en `docs/base-de-datos/` (01 al 03) bajo principios Clean Code, tipado estricto estilo TypeScript, DRY, KISS y YAGNI.
 - 2026-10-28 — **Bloque 1 completado y verificado** en rama `feature/block-1-domain-normalizer` (`11 passed` en `pytest` y `mypy --strict` sin errores).
+- 2026-10-28 — **Bloque 2 completado y verificado** en rama `feature/block-2-matcher-scoring` (`20 passed` en `pytest` y `mypy --strict` sin errores en 12 archivos).

@@ -1,0 +1,130 @@
+# Configuration for job filtering, scoring weights, and search rules
+matching:
+  min_match_score: 40
+  reapply_cooldown_days: 3
+  short_description_base_score: 65
+
+candidate_profile:
+  skills:
+    - React
+    - Node.js
+    - NestJS
+    - TypeScript
+    - JavaScript
+    - PostgreSQL
+    - Next.js
+    - Express
+    - SQL
+    - Prisma
+    - TypeORM
+    - Docker
+    - Git
+    - REST API
+    - Tailwind
+    - HTML
+    - CSS
+    - Jest
+    - Linux
+
+title_blacklist:
+  - senior
+  - "sr."
+  - sr
+  - lead
+  - tech lead
+  - staff
+  - principal
+  - architect
+  - manager
+  - director
+  - head
+  - "+5 años"
+  - "5+ años"
+  - "5+ years"
+  - "+5 years"
+  - "+7 años"
+  - ".net"
+  - "c#"
+  - php
+  - laravel
+  - wordpress
+  - cobol
+  - sap
+  - abap
+  - ruby
+  - rails
+  - ios
+  - swift
+  - flutter
+  - "android nativo"
+
+title_whitelist:
+  - junior
+  - jr
+  - entry level
+  - trainee
+  - associate
+  - desarrollador
+  - software engineer
+  - full stack
+  - fullstack
+  - backend
+  - frontend
+  - web developer
+  - programador
+  - ingeniero de desarrollo
+  - ingeniero de sistemas
+
+company_blacklist:
+  - "Spam Staffing LLC"
+  - "Revendedores Tech"
+
+location_whitelist:
+  - remoto
+  - remote
+  - barranquilla
+  - atlantico
+  - atlántico
+  - colombia
+  - latam
+
+tech_vocabulary:
+  core:
+    weight: 3
+    keywords:
+      - React
+      - Node.js
+      - NestJS
+      - TypeScript
+      - JavaScript
+      - PostgreSQL
+
+  secondary:
+    weight: 2
+    keywords:
+      - Next.js
+      - Express
+      - SQL
+      - Prisma
+      - TypeORM
+      - Docker
+      - Git
+      - REST API
+      - Tailwind
+      - HTML
+      - CSS
+
+  bonus:
+    weight: 1
+    keywords:
+      - AWS
+      - Redis
+      - GraphQL
+      - Jest
+      - Linux
+      - CI/CD
+      - MongoDB
+      - Python
+      - Scrum
+      - Kubernetes
+      - Kafka
