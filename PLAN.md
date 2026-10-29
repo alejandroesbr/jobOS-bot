@@ -18,10 +18,10 @@
 
 ### Bloque 1: Cimientos, Modelos Tipados Inmutables y Normalizador (`domain`)
 
-- [ ]   1. Crear `.gitignore`, `.env.example`, `requirements.txt`, `pyproject.toml` y estructura de paquetes (`src/domain`, `src/adapters`, `src/services`, `src/ui`, `tests`) — `pyproject.toml`, `requirements.txt`
-- [ ]   2. Implementar modelos de dominio inmutables (`JobOffer`, `MatchEvaluation`, `ApplicationRecord`, `SubmissionAttempt`, `QuestionMatch`, `ApplicationStatus`) — `src/domain/models.py`
-- [ ]   3. Implementar normalizador de texto, limpieza de URLs canónicas y generador de `dedup_key` (`company_norm::title_norm`) — `src/domain/text_normalizer.py`
-- [ ]   4. **Prueba Bloque 1:** Crear y ejecutar tests deterministas del normalizador y modelos — verificar con `pytest tests/test_text_normalizer.py -v`
+- [x]   1. Crear `.gitignore`, `.env.example`, `requirements.txt`, `pyproject.toml` y estructura de paquetes (`src/domain`, `src/adapters`, `src/services`, `src/ui`, `tests`) — `pyproject.toml`, `requirements.txt`
+- [x]   2. Implementar modelos de dominio inmutables (`JobOffer`, `MatchEvaluation`, `ApplicationRecord`, `SubmissionAttempt`, `QuestionMatch`, `ApplicationStatus`) — `src/domain/models.py`
+- [x]   3. Implementar normalizador de texto, limpieza de URLs canónicas y generador de `dedup_key` (`company_norm::title_norm`) — `src/domain/text_normalizer.py`
+- [x]   4. **Prueba Bloque 1:** Crear y ejecutar tests deterministas del normalizador y modelos — verificar con `pytest tests/test_text_normalizer.py -v`
 
 ### Bloque 2: Motor de Scoring (`Match >= 40%`) y Configuración Declarativa
 
@@ -58,4 +58,5 @@
 
 ## Log
 
-- 2026-10-28 — Definida arquitectura modular en `docs/arquitectura/` (00 al 06) y lógica de negocio en `docs/logica-negocio/` (01 al 05) bajo principios Clean Code, tipado estricto estilo TypeScript, DRY, KISS y YAGNI.
+- 2026-10-28 — Definida arquitectura modular en `docs/arquitectura/` (00 al 10), lógica de negocio en `docs/logica-negocio/` (01 al 05) y base de datos 3FN en `docs/base-de-datos/` (01 al 03) bajo principios Clean Code, tipado estricto estilo TypeScript, DRY, KISS y YAGNI.
+- 2026-10-28 — **Bloque 1 completado y verificado** en rama `feature/block-1-domain-normalizer` (`11 passed` en `pytest` y `mypy --strict` sin errores).

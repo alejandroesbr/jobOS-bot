@@ -8,7 +8,7 @@ COMPANY_SUFFIX_PATTERN = re.compile(
 )
 
 TITLE_NOISE_PATTERN = re.compile(
-    r"\b(?:urgente|remoto|remote|hibrido|hybrid|barranquilla|colombia|latam|100%)\b",
+    r"\b(?:urgente|remoto|remote|hibrido|hybrid|barranquilla|colombia|latam)\b|100\s*%",
     re.IGNORECASE,
 )
 
