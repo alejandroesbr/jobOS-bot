@@ -1,0 +1,34 @@
+# Private user data & local database
+data/
+*.db
+*.db-shm
+*.db-wal
+
+# Environment variables & secrets
+.env
+.env.*
+!.env.example
+
+# Personal candidate profile & CV (keep .example templates versioned)
+config/profile.yaml
+config/cv_base.md
+
+# Generated outputs
+interviews/
+followups/
+exports/
+
+# Python virtual environments & caches
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Playwright artifacts
+playwright-report/
+test-results/
+
