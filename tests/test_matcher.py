@@ -8,7 +8,7 @@ from src.domain.matcher import OfferMatcher
 
 @pytest.fixture
 def filter_config() -> FilterConfig:
-    config_path = Path("config/filters.yaml")
+    config_path = Path("tests/fixtures/test_filters.yaml")
     return load_filter_config(config_path)
 
 
