@@ -276,37 +276,66 @@ def assist_cmd(url: str, db_path: str) -> None:
         repo.close()
 
 
+PORTAL_LOGIN_URLS: dict[str, str] = {
+    "linkedin": "https://www.linkedin.com/login",
+    "glassdoor": "https://www.glassdoor.com/profile/login_input.htm",
+    "computrabajo": "https://candidato.computrabajo.com/login",
+    "elempleo": "https://www.elempleo.com/co/iniciar-sesion",
+    "indeed": "https://secure.indeed.com/auth",
+    "getonbrd": "https://www.getonbrd.com/login",
+}
+
+
 @cli.command(name="auth")
+@click.argument("portal", required=False, default=None)
 @click.option(
     "--output",
     "output_path",
-    default="data/storage_state.json",
+    default=None,
     help="Ruta donde se guardará el estado de cookies y tokens de sesión.",
 )
-def auth_cmd(output_path: str) -> None:
-    """Abre el navegador en modo visible para iniciar sesión manual y exportar storage_state.json."""
+def auth_cmd(portal: str | None, output_path: str | None) -> None:
+    """Abre el navegador en modo visible para iniciar sesión manual en un portal y exportar cookies."""
     from playwright.sync_api import sync_playwright
 
-    print_banner("jobOS-bot — Gestor de Autenticación de Portales", "Inicia sesión en tus portales preferidos y cierra el navegador cuando termines.")
-    out_file = Path(output_path)
+    portal_name = (portal or "linkedin").strip().lower()
+    target_url = PORTAL_LOGIN_URLS.get(portal_name, f"https://www.{portal_name}.com")
+
+    if output_path is not None:
+        out_file = Path(output_path)
+    else:
+        out_file = Path(f"data/sessions/{portal_name}_state.json")
+
     out_file.parent.mkdir(parents=True, exist_ok=True)
+
+    print_banner(
+        f"jobOS-bot — Gestor de Autenticación [{portal_name.upper()}]",
+        "Inicia sesión manualmente en el navegador y presiona ENTER en la consola cuando termines.",
+    )
 
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=False)
         context = browser.new_context()
         page = context.new_page()
 
-        console.print("[green]Navegador abierto. Accede a LinkedIn, GetOnBrd, Computrabajo, etc. e inicia sesión.[/green]")
-        console.print("[yellow]Presiona ENTER en esta terminal una vez hayas iniciado sesión para guardar tus cookies...[/yellow]")
+        console.print(f"[green]Navegador abierto en:[/green] [cyan]{target_url}[/cyan]")
+        console.print("[yellow]Inicia sesión (resuelve Captcha o 2FA si aplica) y luego presiona ENTER en esta terminal...[/yellow]")
 
-        page.goto("https://www.linkedin.com/login")
+        page.goto(target_url)
         input()
 
         context.storage_state(path=str(out_file))
+
+        # Sincronizar en data/storage_state.json para el motor de escaneo
+        default_global_state = Path("data/storage_state.json")
+        default_global_state.parent.mkdir(parents=True, exist_ok=True)
+        context.storage_state(path=str(default_global_state))
+
         context.close()
         browser.close()
 
-    console.print(f"[bold green]Sesión exportada correctamente a:[/bold green] {out_file}")
+    console.print(f"[bold green]✓ Sesión exportada correctamente a:[/bold green] {out_file}")
+    console.print(f"[dim]✓ Sincronizado en: {default_global_state}[/dim]")
 
 
 if __name__ == "__main__":

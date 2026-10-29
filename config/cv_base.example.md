@@ -81,3 +81,4 @@ Actualmente completando el Programa de Desarrollo de Software en Riwi y cursando
 
 - **Español:** Nativo
 - **Inglés:** B2+ (Competencia Profesional Completa / Professional Working Proficiency)
+

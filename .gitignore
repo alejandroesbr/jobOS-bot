@@ -3,6 +3,8 @@ data/
 *.db
 *.db-shm
 *.db-wal
+*_state.json
+storage_state.json
 
 # Environment variables & secrets
 .env

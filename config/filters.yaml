@@ -1,150 +1,149 @@
 # Configuration for job filtering, scoring weights, and search rules
 matching:
-  min_match_score: 40
-  reapply_cooldown_days: 3
-  short_description_base_score: 65
+    min_match_score: 40
+    reapply_cooldown_days: 3
+    short_description_base_score: 65
 
 candidate_profile:
-  skills:
-    - Python
-    - FastAPI
-    - Node.js
-    - Express
-    - TypeScript
-    - JavaScript
-    - PostgreSQL
-    - MySQL
-    - SQL
-    - SQLAlchemy
-    - Sequelize
-    - Docker
-    - Docker Compose
-    - Alembic
-    - Git
-    - GitHub
-    - REST API
-    - JWT
-    - Linux
-    - Postman
-    - Scrum
-    - Agile
+    skills:
+        - Python
+        - FastAPI
+        - Node.js
+        - Express
+        - TypeScript
+        - JavaScript
+        - PostgreSQL
+        - MySQL
+        - SQL
+        - SQLAlchemy
+        - Sequelize
+        - Docker
+        - Docker Compose
+        - Alembic
+        - Git
+        - GitHub
+        - REST API
+        - JWT
+        - Linux
+        - Postman
+        - Scrum
+        - Agile
 
 title_blacklist:
-  - senior
-  - "sr."
-  - sr
-  - lead
-  - tech lead
-  - staff
-  - principal
-  - architect
-  - manager
-  - director
-  - head
-  - "+5 años"
-  - "5+ años"
-  - "5+ years"
-  - "+5 years"
-  - "+7 años"
-  - ".net"
-  - "c#"
-  - php
-  - laravel
-  - wordpress
-  - cobol
-  - sap
-  - abap
-  - ruby
-  - rails
-  - ios
-  - swift
-  - flutter
-  - "android nativo"
+    - senior
+    - "sr."
+    - sr
+    - lead
+    - tech lead
+    - staff
+    - principal
+    - architect
+    - manager
+    - director
+    - head
+    - "+5 años"
+    - "5+ años"
+    - "5+ years"
+    - "+5 years"
+    - "+7 años"
+    - ".net"
+    - "c#"
+    - php
+    - laravel
+    - wordpress
+    - cobol
+    - sap
+    - abap
+    - ruby
+    - rails
+    - ios
+    - swift
+    - flutter
+    - "android nativo"
 
 title_whitelist:
-  - junior
-  - jr
-  - entry level
-  - trainee
-  - associate
-  - desarrollador backend
-  - backend developer
-  - backend
-  - python developer
-  - desarrollador python
-  - node developer
-  - desarrollador node
-  - desarrollador full stack
-  - full stack developer
-  - fullstack
-  - desarrollador junior
-  - software engineer
-  - junior software engineer
-  - programador
-  - desarrollador web
-  - web developer
-  - ingeniero de desarrollo
-  - ingeniero de sistemas
+    - junior
+    - jr
+    - entry level
+    - trainee
+    - associate
+    - desarrollador backend
+    - backend developer
+    - backend
+    - python developer
+    - desarrollador python
+    - node developer
+    - desarrollador node
+    - desarrollador full stack
+    - full stack developer
+    - fullstack
+    - desarrollador junior
+    - software engineer
+    - junior software engineer
+    - programador
+    - desarrollador web
+    - web developer
+    - ingeniero de desarrollo
+    - ingeniero de sistemas
 
 company_blacklist:
-  - "Spam Staffing LLC"
-  - "Revendedores Tech"
+    - "Spam Staffing LLC"
+    - "Revendedores Tech"
 
 location_whitelist:
-  - remoto
-  - remote
-  - barranquilla
-  - atlantico
-  - atlántico
-  - colombia
-  - latam
-  - híbrido
-  - hibrido
+    - remoto
+    - remote
+    - barranquilla
+    - atlantico
+    - atlántico
+    - colombia
+    - latam
+    - híbrido
+    - hibrido
 
 tech_vocabulary:
-  core:
-    weight: 3
-    keywords:
-      - Python
-      - FastAPI
-      - Node.js
-      - TypeScript
-      - PostgreSQL
-      - SQLAlchemy
-      - Express
-      - REST API
+    core:
+        weight: 3
+        keywords:
+            - Python
+            - FastAPI
+            - Node.js
+            - TypeScript
+            - PostgreSQL
+            - SQLAlchemy
+            - Express
+            - REST API
 
-  secondary:
-    weight: 2
-    keywords:
-      - JavaScript
-      - Sequelize
-      - SQL
-      - MySQL
-      - Docker
-      - Docker Compose
-      - Alembic
-      - Git
-      - JWT
-      - Linux
-      - Postman
+    secondary:
+        weight: 2
+        keywords:
+            - JavaScript
+            - Sequelize
+            - SQL
+            - MySQL
+            - Docker
+            - Docker Compose
+            - Alembic
+            - Git
+            - JWT
+            - Linux
+            - Postman
 
-  bonus:
-    weight: 1
-    keywords:
-      - Redis
-      - MongoDB
-      - AWS
-      - CI/CD
-      - React
-      - Next.js
-      - Tailwind
-      - HTML
-      - CSS
-      - Scrum
-      - Agile
-      - Jest
-      - Pytest
-      - Kubernetes
-      - Microservices
-      - GraphQL
+    bonus:
+        weight: 1
+        keywords:
+            - Redis
+            - MongoDB
+            - AWS
+            - CI/CD
+            - Next.js
+            - Tailwind
+            - HTML
+            - CSS
+            - Scrum
+            - Agile
+            - Jest
+            - Pytest
+            - Kubernetes
+            - Microservices
+            - GraphQL

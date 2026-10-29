@@ -1,3 +1,4 @@
+from pathlib import Path
 from collections.abc import Callable
 from dataclasses import dataclass, field
 import logging
@@ -52,7 +53,8 @@ class ScraperOrchestrator:
     ) -> dict[PortalName, PortalScanResult]:
         results: dict[PortalName, PortalScanResult] = {}
 
-        with create_browser_session(headless=headless) as context:
+        storage_path = Path('data/storage_state.json') if Path('data/storage_state.json').is_file() else None
+        with create_browser_session(headless=headless, storage_state_path=storage_path) as context:
             page: Page = context.new_page()
 
             for portal_name in portals:
