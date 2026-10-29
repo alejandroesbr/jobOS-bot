@@ -124,3 +124,4 @@ class GeminiClient:
             contents=prompt,
         )
         return (response.text or "").strip()
+

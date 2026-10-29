@@ -128,3 +128,4 @@ def test_sync_with_notion_orchestration(populated_repo: ApplicationRepository) -
     assert report.pushed_new == 1
     assert report.pulled_statuses == 1
     assert report.interview_preps_triggered == 1
+

@@ -17,3 +17,4 @@ RUN mkdir -p data interviews followups exports
 
 ENTRYPOINT ["python", "cli.py"]
 CMD ["stats"]
+

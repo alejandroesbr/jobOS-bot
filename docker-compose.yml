@@ -12,3 +12,4 @@ services:
       - NOTION_TOKEN=${NOTION_TOKEN}
       - NOTION_DATABASE_ID=${NOTION_DATABASE_ID}
       - HEADLESS=true
+

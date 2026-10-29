@@ -31,3 +31,4 @@ def test_gemini_client_with_mocked_genai() -> None:
     result = client.generate_qa_fallback("¿Años con React?", "number", "context")
     assert result == "Mocked AI Response"
     assert mock_genai_client.models.generate_content.called
+

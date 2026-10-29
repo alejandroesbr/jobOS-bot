@@ -124,3 +124,4 @@ def test_notion_client_bootstrap_to_repository() -> None:
     assert all_apps[0].title == "Frontend Developer"
     assert all_apps[0].company == "Acme Startup"
     assert all_apps[0].notion_page_id == "page-remote-1"
+

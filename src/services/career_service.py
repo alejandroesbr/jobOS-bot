@@ -185,3 +185,4 @@ class CareerService:
             stalled_followups=len(stalled),
             bootstrapped_from_notion=bootstrapped,
         )
+

@@ -231,3 +231,4 @@ class NotionClient:
         except Exception as ex:
             logger.warning(f"Error bootstrapping Notion data: {ex}")
             return 0
+
