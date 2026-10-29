@@ -43,10 +43,10 @@
 
 ### Bloque 5: Scrapers Multi-Portal Single-Thread y CLI con `Rich`
 
-- [ ]   14. Implementar gestor de contexto Playwright (`browser.py`), contrato `BasePortalScraper` (`base.py` con _Template Method_ DRY) y `ScraperOrchestrator` (`orchestrator.py` con aislamiento de errores) — `src/adapters/scrapers/`
-- [ ]   15. Implementar los 6 adaptadores de portales (`linkedin.py`, `getonbrd.py`, `computrabajo.py`, `elempleo.py`, `glassdoor.py`, `indeed.py`) — `src/adapters/scrapers/`
-- [ ]   16. Implementar `scan_service.py`, interfaz `src/ui/console.py` (`Rich`) y comandos `auth`, `scan`, `stats`, `export` en `cli.py` — `src/services/scan_service.py`, `src/ui/console.py`, `cli.py`
-- [ ]   17. **Prueba Bloque 5:** Verificar ejecución real de CLI (`python cli.py stats`, `python cli.py export`, `python cli.py scan --portal getonbrd --limit 5`)
+- [x]   14. Implementar gestor de contexto Playwright (`browser.py`), contrato `BasePortalScraper` (`base.py` con _Template Method_ DRY) y `ScraperOrchestrator` (`orchestrator.py` con aislamiento de errores) — `src/adapters/scrapers/`
+- [x]   15. Implementar los 6 adaptadores de portales (`linkedin.py`, `getonbrd.py`, `computrabajo.py`, `elempleo.py`, `glassdoor.py`, `indeed.py`) — `src/adapters/scrapers/`
+- [x]   16. Implementar `scan_service.py`, interfaz `src/ui/console.py` (`Rich`) y comandos `auth`, `scan`, `stats`, `export` en `cli.py` — `src/services/scan_service.py`, `src/ui/console.py`, `cli.py`
+- [x]   17. **Prueba Bloque 5:** Verificar ejecución real de CLI (`python cli.py stats`, `python cli.py export`, `python cli.py scan --portal getonbrd --limit 5`)
 
 ### Bloque 6: Copiloto `assist`, Gemini (`tailor` / `prep`), Notion Multi-PC (`sync`), Servidor MCP y Cloud \$0
 
@@ -63,3 +63,4 @@
 - 2026-10-28 — **Bloque 2 completado y verificado** en rama `feature/block-2-matcher-scoring` (`20 passed` en `pytest` y `mypy --strict` sin errores en 12 archivos).
 - 2026-10-28 — **Bloque 3 completado y verificado** en rama `feature/block-3-sqlite-repository` (`27 passed` en `pytest` y `mypy --strict` sin errores en 15 archivos).
 - 2026-10-28 — **Bloque 4 completado y verificado** en rama `feature/block-4-qa-fuzzy-engine` (`41 passed` en `pytest` y `mypy --strict` sin errores en 17 archivos).
+- 2026-10-28 — **Bloque 5 completado y verificado** en rama `feature/block-5-multiportal-scrapers` (`50 passed` en `pytest`, comandos CLI en vivo validados y `mypy --strict` sin errores en 32 archivos).
