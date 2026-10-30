@@ -87,7 +87,7 @@ def test_matcher_rejects_location_outside_whitelist(matcher: OfferMatcher) -> No
 
 
 def test_matcher_accepts_partial_match_above_threshold(matcher: OfferMatcher) -> None:
-    # Offer asks for: React (3), Node.js (3), TypeScript (3), Kubernetes (1), Kafka (1), Python (1), MongoDB (1)
+    # Offer asks for: React (3), Node.js (3), TypeScript (3), Kubernetes (1), Kafka (1), AWS (1), MongoDB (1)
     # Total weight: 13. Candidate matches: React (3) + Node (3) + TS (3) = 9.
     # Score: round(9/13 * 100) = 69%
     offer = JobOffer(
@@ -99,7 +99,7 @@ def test_matcher_accepts_partial_match_above_threshold(matcher: OfferMatcher) ->
         url="https://getonbrd.com/jobs/5001",
         description=(
             "Requerimos Desarrollador con conocimientos en React, Node.js y TypeScript. "
-            "Deseable manejo de Kubernetes, Kafka, Python y MongoDB."
+            "Deseable manejo de Kubernetes, Kafka, AWS y MongoDB."
         ),
     )
     evaluation = matcher.evaluate(offer)
@@ -133,7 +133,7 @@ def test_matcher_accepts_high_affinity_match(matcher: OfferMatcher) -> None:
 
 
 def test_matcher_rejects_offer_below_threshold(matcher: OfferMatcher) -> None:
-    # Offer demands skills candidate doesn't have: Python (1), MongoDB (1), Redis (1), GraphQL (1), Kubernetes (1), Kafka (1)
+    # Offer demands skills candidate doesn't have: AWS (1), MongoDB (1), Redis (1), GraphQL (1), Kubernetes (1), Kafka (1)
     # Plus candidate only matches Linux (1).
     # Weight: 1/7 = 14% < 40%.
     offer = JobOffer(
@@ -143,7 +143,7 @@ def test_matcher_rejects_offer_below_threshold(matcher: OfferMatcher) -> None:
         location="Colombia Remoto",
         modality=WorkModality.REMOTE,
         url="https://elempleo.com/ofertas/7001",
-        description="Buscamos desarrollador con Python, MongoDB, Redis, GraphQL, Kubernetes, Kafka en entorno Linux.",
+        description="Buscamos desarrollador con AWS, MongoDB, Redis, GraphQL, Kubernetes, Kafka en entorno Linux.",
     )
     evaluation = matcher.evaluate(offer)
 

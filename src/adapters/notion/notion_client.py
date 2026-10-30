@@ -1,6 +1,9 @@
 import logging
 import os
+from pathlib import Path
+import re
 from typing import Any
+import uuid
 
 import httpx
 
@@ -23,6 +26,21 @@ NOTION_API_BASE = "https://api.notion.com/v1"
 NOTION_VERSION = "2022-06-28"
 
 
+def clean_notion_id(raw_id: str | None) -> str:
+    if not raw_id:
+        return ""
+    cleaned = raw_id.strip()
+    match = re.search(
+        r"([a-f0-9]{8}-?[a-f0-9]{4}-?[a-f0-9]{4}-?[a-f0-9]{4}-?[a-f0-9]{12})",
+        cleaned,
+        re.IGNORECASE,
+    )
+    if match:
+        hex_val = match.group(1).replace("-", "").lower()
+        return str(uuid.UUID(hex_val))
+    return cleaned
+
+
 class NotionClient:
     def __init__(
         self,
@@ -31,8 +49,87 @@ class NotionClient:
         timeout: float = 15.0,
     ) -> None:
         self.api_token = api_token or os.getenv("NOTION_TOKEN", "")
-        self.database_id = database_id or os.getenv("NOTION_DATABASE_ID", "")
+        raw_db_id = database_id or os.getenv("NOTION_DATABASE_ID", "")
+        self.database_id = clean_notion_id(raw_db_id)
         self.timeout = timeout
+        self._resolved: bool = False
+
+    def resolve_database_id(self) -> str:
+        """Resolves whether database_id is a database or a page.
+        If it is a page, discovers any child database or creates one automatically.
+        """
+        if not self.is_configured:
+            return ""
+
+        try:
+            with httpx.Client(timeout=self.timeout) as client:
+                db_res = client.get(f"{NOTION_API_BASE}/databases/{self.database_id}", headers=self._headers())
+                if db_res.status_code == 200:
+                    self._resolved = True
+                    return self.database_id
+
+                page_res = client.get(f"{NOTION_API_BASE}/pages/{self.database_id}", headers=self._headers())
+                if page_res.status_code == 200:
+                    blocks_res = client.get(
+                        f"{NOTION_API_BASE}/blocks/{self.database_id}/children", headers=self._headers()
+                    )
+                    if blocks_res.status_code == 200:
+                        blocks = blocks_res.json().get("results", [])
+                        for block in blocks:
+                            if block.get("type") == "child_database":
+                                child_db_id = str(block.get("id"))
+                                logger.info(
+                                    f"Resolved child database '{block.get('child_database', {}).get('title')}' "
+                                    f"({child_db_id}) inside page {self.database_id}"
+                                )
+                                self.database_id = child_db_id
+                                self._persist_db_id_to_env(child_db_id)
+                                self._resolved = True
+                                return child_db_id
+
+                        create_payload = {
+                            "parent": {"type": "page_id", "page_id": self.database_id},
+                            "title": [{"type": "text", "text": {"content": "Pipeline de Empleo"}}],
+                            "properties": {
+                                "Cargo": {"title": {}},
+                                "Empresa": {"rich_text": {}},
+                                "Portal": {"select": {}},
+                                "Estado": {"select": {}},
+                                "Modalidad": {"select": {}},
+                                "Stack Detectado": {"multi_select": {}},
+                                "Match (%)": {"number": {"format": "number"}},
+                                "Veces Postulado": {"number": {"format": "number"}},
+                                "Link Oferta": {"url": {}},
+                                "Último Envío": {"date": {}},
+                            },
+                        }
+                        create_res = client.post(
+                            f"{NOTION_API_BASE}/databases", headers=self._headers(), json=create_payload
+                        )
+                        if create_res.status_code in {200, 201}:
+                            new_db_id = str(create_res.json().get("id"))
+                            logger.info(
+                                f"Created new database 'Pipeline de Empleo' ({new_db_id}) inside page {self.database_id}"
+                            )
+                            self.database_id = new_db_id
+                            self._persist_db_id_to_env(new_db_id)
+                            self._resolved = True
+                            return new_db_id
+        except Exception as ex:
+            logger.warning(f"Error resolving Notion database ID: {ex}")
+
+        self._resolved = True
+        return self.database_id
+
+    def _persist_db_id_to_env(self, new_db_id: str) -> None:
+        try:
+            env_path = Path(".env")
+            if env_path.is_file():
+                content = env_path.read_text(encoding="utf-8")
+                updated = re.sub(r"NOTION_DATABASE_ID=.*", f"NOTION_DATABASE_ID={new_db_id}", content)
+                env_path.write_text(updated, encoding="utf-8")
+        except Exception:
+            pass
 
     @property
     def is_configured(self) -> bool:
@@ -48,6 +145,9 @@ class NotionClient:
     def push_application(self, record: ApplicationRecord) -> str | None:
         if not self.is_configured:
             return None
+
+        if not self._resolved:
+            self.resolve_database_id()
 
         # Build properties payload
         primary_submission = record.submissions[0] if record.submissions else None
@@ -88,6 +188,18 @@ class NotionClient:
                     data = res.json()
                     page_id = str(data.get("id"))
                     return page_id
+                elif res.status_code == 400 and "is a page, not a database" in res.text:
+                    new_id = self.resolve_database_id()
+                    payload["parent"]["database_id"] = new_id
+                    retry_res = client.post(
+                        f"{NOTION_API_BASE}/pages",
+                        headers=self._headers(),
+                        json=payload,
+                    )
+                    if retry_res.status_code in {200, 201}:
+                        return str(retry_res.json().get("id"))
+                    logger.warning(f"Notion push retry failed (HTTP {retry_res.status_code}): {retry_res.text}")
+                    return None
                 else:
                     logger.warning(f"Notion push failed (HTTP {res.status_code}): {res.text}")
                     return None
@@ -124,6 +236,9 @@ class NotionClient:
         if not self.is_configured:
             return []
 
+        if not self._resolved:
+            self.resolve_database_id()
+
         try:
             with httpx.Client(timeout=self.timeout) as client:
                 res = client.post(
@@ -156,6 +271,9 @@ class NotionClient:
     def bootstrap_to_repository(self, repository: ApplicationRepository) -> int:
         if not self.is_configured:
             return 0
+
+        if not self._resolved:
+            self.resolve_database_id()
 
         try:
             with httpx.Client(timeout=self.timeout) as client:

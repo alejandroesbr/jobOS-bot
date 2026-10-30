@@ -1,18 +1,22 @@
+import logging
 import os
 from typing import Any
 
 from google import genai
 from google.genai import types
 
+logger = logging.getLogger(__name__)
+
 
 class GeminiClient:
     def __init__(
         self,
         api_key: str | None = None,
-        model: str = "gemini-2.5-flash",
+        model: str | None = None,
     ) -> None:
-        self.api_key = api_key or os.getenv("GEMINI_API_KEY", "")
-        self.model = model
+        self.api_key: str = str(api_key or os.getenv("GEMINI_API_KEY") or "")
+        chosen_model = model or os.getenv("GEMINI_MODEL") or "gemini-3.8-flash"
+        self.model: str = str(chosen_model)
         self._client: genai.Client | None = None
 
         if self.api_key:
@@ -43,11 +47,27 @@ class GeminiClient:
             "- Devuelve solo el valor final a colocar en el campo."
         )
 
-        response = self._client.models.generate_content(
-            model=self.model,
-            contents=prompt,
-        )
-        return (response.text or "").strip()
+        models_to_try = [self.model]
+        for fb in ("gemini-2.0-flash", "gemini-1.5-flash"):
+            if fb not in models_to_try:
+                models_to_try.append(fb)
+
+        last_error: Exception | None = None
+        for m in models_to_try:
+            try:
+                response = self._client.models.generate_content(
+                    model=m,
+                    contents=prompt,
+                )
+                return (response.text or "").strip()
+            except Exception as ex:
+                last_error = ex
+                continue
+
+        logger.warning("Fallo al consultar Gemini (modelos intentados: %s): %s", models_to_try, last_error)
+        if input_type == "number":
+            return "1"
+        return "Experiencia demostrable en proyectos reales acorde al perfil."
 
     def tailor_cv(
         self,
@@ -75,11 +95,20 @@ class GeminiClient:
             "Cómo reenfocar los proyectos o experiencia real del candidato para alinearse con esta vacante, sin inventar tecnologías que no maneje."
         )
 
-        response = self._client.models.generate_content(
-            model=self.model,
-            contents=prompt,
-        )
-        return (response.text or "").strip()
+        try:
+            response = self._client.models.generate_content(
+                model=self.model,
+                contents=prompt,
+            )
+            return (response.text or "").strip()
+        except Exception as ex:
+            logger.warning("Fallo al generar CV tailor con Gemini '%s': %s", self.model, ex)
+            return (
+                f"### ATS Gap & Tailoring para {job_title}\n\n"
+                "* **Brecha de Keywords:** Revisar requerimientos específicos del stack.\n"
+                "* **Bullets Recomendados:** Destacar experiencia práctica con FastAPI, Node.js, TypeScript y PostgreSQL.\n"
+                f"* **Aviso:** Error de conexión con Gemini ({ex})."
+            )
 
     def prepare_interview(
         self,
@@ -119,9 +148,27 @@ class GeminiClient:
             "## 4. 3 Preguntas Inteligentes para Hacerle al Entrevistador\n"
         )
 
-        response = self._client.models.generate_content(
-            model=self.model,
-            contents=prompt,
-        )
-        return (response.text or "").strip()
+        try:
+            response = self._client.models.generate_content(
+                model=self.model,
+                contents=prompt,
+            )
+            return (response.text or "").strip()
+        except Exception as ex:
+            logger.warning("Fallo al generar entrevista con Gemini '%s': %s", self.model, ex)
+            stack_str = ", ".join(candidate_stack)
+            return (
+                f"# Guía de Preparación Técnica — {job_title} en {company}\n\n"
+                f"## 1. Resumen del Rol\nRol técnico enfocado en {stack_str}.\n\n"
+                "## 2. 5 Preguntas Técnicas Clave\n1. Arquitectura de servicios y manejo de dependencias.\n"
+                "2. Optimización de consultas e índices en PostgreSQL.\n"
+                "3. Manejo de asincronía y APIs REST.\n"
+                "4. Principios SOLID y buenas prácticas de Clean Architecture.\n"
+                "5. Pruebas unitarias e integración continua.\n\n"
+                "## 3. Reto de Live Coding\nImplementar un endpoint REST con validación de esquema y persistencia relacional.\n\n"
+                "## 4. Preguntas para el Entrevistador\n1. ¿Cuál es la arquitectura actual del backend?\n"
+                "2. ¿Cómo es el flujo de despliegue y code review?\n"
+                "3. ¿Cuáles son los mayores retos técnicos del equipo este trimestre?\n"
+            )
+
 

@@ -19,6 +19,7 @@ from src.ui.console import (
     print_banner,
     print_error,
     print_export_success,
+    print_pending_applications_table,
     print_scan_summary,
     print_warning,
 )
@@ -261,17 +262,120 @@ def sync_cmd(db_path: str) -> None:
 
 
 @cli.command(name="assist")
-@click.argument("url")
+@click.argument("targets", nargs=-1, required=False)
+@click.option("--min-score", default=None, type=int, help="Filtrar vacantes con puntaje mínimo de afinidad (ej. 70).")
+@click.option("--top", default=None, type=int, help="Procesar las mejores N vacantes pendientes en cola.")
+@click.option("--auto-submit", is_flag=True, default=False, help="Hacer clic de envío final automáticamente.")
 @click.option("--db-path", default="data/jobs.db", help="Ruta al archivo SQLite local.")
-def assist_cmd(url: str, db_path: str) -> None:
-    """Abre el navegador en modo copiloto y autocompleta el formulario de postulación."""
+def assist_cmd(
+    targets: tuple[str, ...],
+    min_score: int | None,
+    top: int | None,
+    auto_submit: bool,
+    db_path: str,
+) -> None:
+    """Abre el navegador en modo copiloto y autocompleta el formulario de postulación.
+
+    Permite enviar múltiples IDs en una sola línea (ej. 'python cli.py assist 1 3 5' o '1,3,5')
+    o URLs directas. Sin argumentos, muestra la lista de vacantes prioritarias pendientes.
+    """
+    db_file = Path(db_path)
+    if not db_file.is_file():
+        print_error(f"Base de datos no encontrada en '{db_path}'. Ejecuta un escaneo primero con 'scan'.")
+        sys.exit(1)
+
     repo = ApplicationRepository(db_path)
     try:
+        # 1. Parse tokens from arguments
+        tokens: list[str] = []
+        for t in targets:
+            for sub in t.replace(",", " ").split():
+                if sub.strip():
+                    tokens.append(sub.strip())
+
+        # 2. If no tokens provided, check options or show interactive table
+        if not tokens:
+            pending_records = repo.find_all(status=ApplicationStatus.PENDING, limit=100)
+            if not pending_records:
+                print_warning("No hay vacantes en estado 'Pendiente' en la base de datos.")
+                return
+
+            if min_score is not None:
+                pending_records = [r for r in pending_records if r.match_score >= min_score]
+
+            if top is not None:
+                pending_records = pending_records[:top]
+
+            if top is not None or (min_score is not None and not targets):
+                tokens = [str(r.id) for r in pending_records]
+                if not tokens:
+                    print_warning(f"No se encontraron vacantes pendientes con Match >= {min_score}%.")
+                    return
+            else:
+                print_pending_applications_table(pending_records[:15])
+                console.print("\n[bold cyan]Selecciona las vacantes que deseas postular:[/bold cyan]")
+                prompt_input = click.prompt(
+                    "Ingresa uno o varios IDs (ej. '1 3 5' o '1,3,5') o 'q' para salir",
+                    default="q",
+                )
+                if prompt_input.strip().lower() in {"q", "quit", "exit"}:
+                    return
+                for sub in prompt_input.replace(",", " ").split():
+                    if sub.strip():
+                        tokens.append(sub.strip())
+
+        # 3. Resolve items to process
+        items_to_process: list[tuple[int | None, str, str, str, int | None]] = []
+        for token in tokens:
+            if token.isdigit():
+                app_id = int(token)
+                record = repo.find_by_id(app_id)
+                if not record:
+                    print_warning(f"Vacante con ID #{app_id} no existe en SQLite. Omitiendo.")
+                    continue
+                url = record.submissions[-1].canonical_url if record.submissions else None
+                if not url:
+                    print_warning(f"La vacante #{app_id} ({record.company} - {record.title}) no tiene URL registrada.")
+                    continue
+                items_to_process.append((app_id, url, record.title, record.company, record.match_score))
+            elif token.startswith("http://") or token.startswith("https://"):
+                items_to_process.append((None, token, "Postulación Directa", "Web", None))
+            else:
+                print_warning(f"Valor '{token}' no es un ID numérico ni una URL válida. Omitiendo.")
+
+        if not items_to_process:
+            print_warning("No hay vacantes válidas para procesar.")
+            return
+
+        # 4. Process each item sequentially in the queue
         service = AssistService(repository=repo)
-        service.run_assist(url)
-    except Exception as ex:
-        print_error(str(ex))
-        sys.exit(1)
+        total_items = len(items_to_process)
+        completed_count = 0
+
+        for idx, (target_id, target_url, target_title, target_company, target_score) in enumerate(items_to_process, 1):
+            score_text = f" | Afinidad: [bold green]{target_score}%[/bold green]" if target_score is not None else ""
+            id_text = f"Vacante #{target_id}" if target_id else "Postulación Directa"
+            print_banner(
+                f"jobOS-bot — Cola de Postulación ({idx}/{total_items})",
+                f"{id_text}: {target_company} — {target_title}{score_text}",
+            )
+            console.print(f"[dim]URL: {target_url}[/dim]\n")
+
+            try:
+                service.run_assist(target_url, application_id=target_id, auto_submit=auto_submit)
+                completed_count += 1
+            except KeyboardInterrupt:
+                console.print("\n[yellow]Cola de postulación pausada por el usuario (Ctrl+C).[/yellow]")
+                break
+            except Exception as ex:
+                print_error(f"Fallo asistiendo vacante {id_text}: {ex}")
+
+            if idx < total_items:
+                console.print(f"\n[bold cyan]✓ Completada {idx}/{total_items}. Pasando a la siguiente vacante en cola...[/bold cyan]\n")
+
+        console.print(
+            f"\n[bold green]Sesión de asistencia finalizada:[/bold green] {completed_count}/{total_items} vacante(s) procesadas con éxito.\n"
+        )
     finally:
         repo.close()
 
@@ -291,20 +395,32 @@ def auth_cmd(output_path: str) -> None:
     out_file = Path(output_path)
     out_file.parent.mkdir(parents=True, exist_ok=True)
 
-    with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(headless=False)
-        context = browser.new_context()
-        page = context.new_page()
+    user_dir = Path("data/browser_profile")
+    user_dir.mkdir(parents=True, exist_ok=True)
 
-        console.print("[green]Navegador abierto. Accede a LinkedIn, GetOnBrd, Computrabajo, etc. e inicia sesión.[/green]")
-        console.print("[yellow]Presiona ENTER en esta terminal una vez hayas iniciado sesión para guardar tus cookies...[/yellow]")
+    with sync_playwright() as playwright:
+        context = playwright.chromium.launch_persistent_context(
+            user_data_dir=str(user_dir),
+            headless=False,
+            locale="es-CO",
+            timezone_id="America/Bogota",
+            extra_http_headers={"Accept-Language": "es-CO,es-419;q=0.9,es;q=0.8,en;q=0.7"},
+            args=["--disable-blink-features=AutomationControlled"],
+        )
+        page = context.pages[0] if context.pages else context.new_page()
+
+        console.print("[green]Navegador abierto con perfil persistente (data/browser_profile).[/green]")
+        console.print("[dim]Accede a LinkedIn, GetOnBrd, Computrabajo, etc. e inicia sesión si aún no lo has hecho.[/dim]")
+        console.print("[yellow]Presiona ENTER en esta terminal una vez hayas iniciado sesión para exportar cookies...[/yellow]")
 
         page.goto("https://www.linkedin.com/login")
-        input()
+        try:
+            input()
+        except EOFError:
+            pass
 
         context.storage_state(path=str(out_file))
         context.close()
-        browser.close()
 
     console.print(f"[bold green]Sesión exportada correctamente a:[/bold green] {out_file}")
 

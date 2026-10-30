@@ -99,3 +99,27 @@ def test_cli_scan_help() -> None:
     assert "--portal" in result.output
     assert "--limit" in result.output
     assert "--headless" in result.output
+
+
+def test_cli_assist_help() -> None:
+    runner = CliRunner()
+    result = runner.invoke(cli, ["assist", "--help"])
+    assert result.exit_code == 0
+    assert "--min-score" in result.output
+    assert "--top" in result.output
+
+
+def test_cli_assist_missing_db() -> None:
+    runner = CliRunner()
+    result = runner.invoke(cli, ["assist", "1", "2", "--db-path", "non_existent.db"])
+    assert result.exit_code == 1
+    assert "Base de datos no encontrada" in result.output
+
+
+def test_cli_assist_unknown_ids(populated_db_path: str) -> None:
+    runner = CliRunner()
+    result = runner.invoke(cli, ["assist", "999", "1000", "--db-path", populated_db_path])
+    assert result.exit_code == 0
+    assert "Vacante con ID #999 no existe" in result.output
+    assert "No hay vacantes válidas para procesar" in result.output
+

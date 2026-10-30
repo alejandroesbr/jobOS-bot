@@ -7,7 +7,7 @@ Copiloto local en Windows 11 (**100% Python** + Playwright + SQLite + Gemini + N
 python cli.py auth                            # Abre navegador para loguearse y exporta data/storage_state.json
 python cli.py scan --portal all               # Escanea secuencialmente todos los portales habilitados
 python cli.py scan --portal linkedin,getonbrd # Escanea portales específicos (single-thread)
-python cli.py assist <url>                    # Autocompleta formulario con memoria local + Gemini (PC visible)
+python cli.py assist <id1> [id2 ...]          # Encola y asiste vacantes por ID o URL (memoria local + Gemini)
 python cli.py stats                           # Ranking en consola (Rich) de tecnologías más pedidas
 python cli.py tailor <job_id>                 # Sugiere ajustes al CV según la descripción del cargo
 python cli.py prep <job_id>                   # Genera guía de entrevista en interviews/<empresa>.md

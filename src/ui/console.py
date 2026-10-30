@@ -119,6 +119,31 @@ def print_export_success(format_type: str, file_path: str, count: int) -> None:
     console.print(Panel(msg, title="Exportación Completa", border_style="green", expand=False))
 
 
+def print_pending_applications_table(records: list[ApplicationRecord]) -> None:
+    if not records:
+        return
+    table = Table(title="Vacantes Prioritarias Pendientes de Postulación", border_style="dim", header_style="bold cyan")
+    table.add_column("ID", justify="center", style="bold cyan")
+    table.add_column("Match %", justify="center")
+    table.add_column("Empresa", style="bold")
+    table.add_column("Cargo", style="white")
+    table.add_column("Portal", style="dim")
+    table.add_column("Modalidad", style="dim")
+
+    for r in records:
+        score_style = "bold green" if r.match_score >= 70 else "yellow" if r.match_score >= 40 else "red"
+        portal_str = r.submissions[0].portal.value if r.submissions else "-"
+        table.add_row(
+            str(r.id),
+            f"[{score_style}]{r.match_score}%[/{score_style}]",
+            r.company[:25],
+            r.title[:40],
+            portal_str,
+            r.modality.value,
+        )
+    console.print(table)
+
+
 def print_error(message: str) -> None:
     console.print(f"[bold red]ERROR:[/bold red] {message}")
 
