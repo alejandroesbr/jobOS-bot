@@ -11,7 +11,7 @@ def test_gemini_client_offline_fallback() -> None:
     assert client.is_available is False
 
     qa_fallback = client.generate_qa_fallback("¿Años con React?", "number", "profile context")
-    assert qa_fallback != ""
+    assert qa_fallback == ""
 
     tailor_md = client.tailor_cv("Junior Dev", "React & Node", "My CV")
     assert "ATS Gap" in tailor_md

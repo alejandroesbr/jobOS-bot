@@ -145,3 +145,68 @@ def test_sync_with_notion_orchestration(
     assert report.pulled_statuses == 1
     assert report.interview_preps_triggered == 1
 
+
+
+def test_tailor_cv_does_not_cache_gemini_fallback(populated_repo: ApplicationRepository) -> None:
+    mock_gemini = MagicMock(spec=GeminiClient)
+    mock_gemini.tailor_cv.return_value = "Aviso: Error de conexión con Gemini (429 quota)"
+    mock_gemini.last_call_failed = True
+
+    service = CareerService(repository=populated_repo, gemini_client=mock_gemini, notion_client=MagicMock(spec=NotionClient))
+    service.tailor_cv(application_id=1)
+    service.tailor_cv(application_id=1)
+
+    assert mock_gemini.tailor_cv.call_count == 2
+    rec = populated_repo.find_by_id(1)
+    assert rec is not None
+    assert rec.cv_tailor_cache is None
+
+
+def test_prepare_interview_reuses_existing_guide(populated_repo: ApplicationRepository, tmp_path: Path) -> None:
+    mock_gemini = MagicMock(spec=GeminiClient)
+    mock_gemini.prepare_interview.return_value = "# Guide"
+    mock_gemini.last_call_failed = False
+
+    service = CareerService(
+        repository=populated_repo,
+        gemini_client=mock_gemini,
+        notion_client=MagicMock(spec=NotionClient),
+        interviews_dir=tmp_path / "interviews",
+    )
+    first = service.prepare_interview(application_id=1)
+    second = service.prepare_interview(application_id=1)
+
+    assert first == second
+    assert mock_gemini.prepare_interview.call_count == 1
+
+
+def test_sync_pushes_local_status_change_instead_of_reverting_it(
+    populated_repo: ApplicationRepository,
+    tmp_path: Path,
+) -> None:
+    populated_repo.update_notion_page_id(1, "page-1")
+    populated_repo.update_notion_synced_status(1, ApplicationStatus.APPLIED)
+
+    mock_notion = MagicMock(spec=NotionClient)
+    mock_notion.is_configured = True
+    mock_notion.update_application.return_value = True
+    # Notion aún muestra el estado anterior; el cambio local (seguimiento a +7 días) debe subir.
+    mock_notion.pull_status_updates.return_value = [("page-1", "Enviado")]
+
+    service = CareerService(
+        repository=populated_repo,
+        gemini_client=MagicMock(spec=GeminiClient),
+        notion_client=mock_notion,
+        interviews_dir=tmp_path / "interviews",
+        followups_dir=tmp_path / "followups",
+    )
+    report = service.sync_with_notion()
+
+    rec = populated_repo.find_by_id(1)
+    assert rec is not None
+    assert rec.status == ApplicationStatus.FOLLOW_UP_REQUIRED
+    assert rec.notion_synced_status == ApplicationStatus.FOLLOW_UP_REQUIRED
+    assert report.pulled_statuses == 0
+    assert report.updated_existing == 1
+    pushed_record = mock_notion.update_application.call_args.args[1]
+    assert pushed_record.status == ApplicationStatus.FOLLOW_UP_REQUIRED

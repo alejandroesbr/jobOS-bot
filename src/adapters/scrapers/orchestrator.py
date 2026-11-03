@@ -1,6 +1,8 @@
 from collections.abc import Callable
 from dataclasses import dataclass, field
 import logging
+import os
+from pathlib import Path
 from typing import Type
 
 from playwright.sync_api import BrowserContext, Page
@@ -17,6 +19,9 @@ from src.config_loader import FilterConfig
 from src.domain.models import JobOffer, PortalName
 
 logger = logging.getLogger(__name__)
+
+BROWSER_PROFILE_DIR = Path("data/browser_profile")
+STORAGE_STATE_FILE = Path("data/storage_state.json")
 
 DEFAULT_PORTAL_REGISTRY: dict[PortalName, Type[BasePortalScraper]] = {
     PortalName.LINKEDIN: LinkedInScraper,
@@ -52,8 +57,14 @@ class ScraperOrchestrator:
     ) -> dict[PortalName, PortalScanResult]:
         results: dict[PortalName, PortalScanResult] = {}
 
-        with create_browser_session(headless=headless) as context:
-            page: Page = context.new_page()
+        # Local: perfil persistente visible. Cloud (HEADLESS=true): contexto efímero con storage_state.
+        cloud_mode = os.getenv("HEADLESS", "").strip().lower() == "true"
+        with create_browser_session(
+            headless=headless or cloud_mode,
+            storage_state_path=STORAGE_STATE_FILE if STORAGE_STATE_FILE.is_file() else None,
+            user_data_dir=None if cloud_mode else BROWSER_PROFILE_DIR,
+        ) as context:
+            page: Page = context.pages[0] if context.pages else context.new_page()
 
             for portal_name in portals:
                 scraper_cls = self.registry.get(portal_name)

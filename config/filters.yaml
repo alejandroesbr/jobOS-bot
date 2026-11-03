@@ -3,6 +3,7 @@ matching:
     min_match_score: 40
     reapply_cooldown_days: 3
     short_description_base_score: 65
+    max_years_experience: 3
 
 candidate_profile:
     skills:
@@ -80,6 +81,8 @@ title_whitelist:
     - fullstack
     - frontend
     - web developer
+    - developer
+    - ingeniero de software
     - programador
     - ingeniero de desarrollo
     - ingeniero de sistemas
@@ -96,6 +99,12 @@ location_whitelist:
     - atlántico
     - colombia
     - latam
+
+# Ofertas presenciales o híbridas solo se aceptan en estas ubicaciones
+onsite_location_whitelist:
+    - barranquilla
+    - atlantico
+    - atlántico
 
 tech_vocabulary:
     core:

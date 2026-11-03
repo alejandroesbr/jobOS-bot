@@ -88,6 +88,8 @@ class BasePortalScraper(ABC):
         search_urls = self.build_search_urls(config)
         collected_offers: list[JobOffer] = []
         seen_urls: set[str] = set()
+        pages_loaded = 0
+        cards_found = 0
 
         for search_url in search_urls:
             if len(collected_offers) >= limit:
@@ -95,8 +97,9 @@ class BasePortalScraper(ABC):
 
             try:
                 page.goto(search_url, wait_until="domcontentloaded", timeout=30000)
-                human_delay(1.5, 3.0)
+                human_delay(2.5, 6.0)
                 smooth_scroll(page, steps=2)
+                pages_loaded += 1
             except Exception as ex:
                 logger.warning(f"[{self.portal.value}] Failed loading search page {search_url}: {ex}")
                 continue
@@ -106,6 +109,7 @@ class BasePortalScraper(ABC):
             except Exception as ex:
                 logger.warning(f"[{self.portal.value}] Error extracting cards from {search_url}: {ex}")
                 continue
+            cards_found += len(cards)
 
             for card in cards:
                 if len(collected_offers) >= limit:
@@ -124,7 +128,7 @@ class BasePortalScraper(ABC):
                 # Stage 2: Navigate to detail and extract full description
                 try:
                     description = self.extract_description(page, card.url)
-                    human_delay(1.0, 2.0)
+                    human_delay(2.5, 6.0)
                 except Exception as ex:
                     logger.warning(f"[{self.portal.value}] Failed extracting detail for {card.url}: {ex}")
                     description = ""
@@ -143,5 +147,13 @@ class BasePortalScraper(ABC):
                     external_id=card.external_id,
                 )
                 collected_offers.append(offer)
+
+        if search_urls and pages_loaded == 0:
+            raise PortalScrapeError(self.portal, "No se pudo cargar ninguna página de búsqueda.")
+        if pages_loaded > 0 and cards_found == 0:
+            raise PortalScrapeError(
+                self.portal,
+                "0 vacantes en las páginas de búsqueda: posible cambio de DOM, captcha o sesión expirada.",
+            )
 
         return collected_offers

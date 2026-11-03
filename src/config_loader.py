@@ -19,6 +19,7 @@ class MatchingRules:
     min_match_score: int = 40
     reapply_cooldown_days: int = 3
     short_description_base_score: int = 65
+    max_years_experience: int = 3
 
 
 @dataclass(frozen=True, slots=True)
@@ -45,6 +46,7 @@ class FilterConfig:
     company_blacklist: tuple[str, ...]
     location_whitelist: tuple[str, ...]
     tech_vocabulary: TechVocabulary
+    onsite_location_whitelist: tuple[str, ...] = ()
 
 
 def _extract_string_tuple(data: dict[str, object], key: str) -> tuple[str, ...]:
@@ -71,6 +73,7 @@ def load_filter_config(config_path: Path | str = "config/filters.yaml") -> Filte
         min_match_score=int(matching_dict.get("min_match_score", 40)),
         reapply_cooldown_days=int(matching_dict.get("reapply_cooldown_days", 3)),
         short_description_base_score=int(matching_dict.get("short_description_base_score", 65)),
+        max_years_experience=int(matching_dict.get("max_years_experience", 3)),
     )
 
     profile_raw = raw_data.get("candidate_profile", {})
@@ -102,6 +105,7 @@ def load_filter_config(config_path: Path | str = "config/filters.yaml") -> Filte
         company_blacklist=_extract_string_tuple(raw_data, "company_blacklist"),
         location_whitelist=_extract_string_tuple(raw_data, "location_whitelist"),
         tech_vocabulary=tech_vocabulary,
+        onsite_location_whitelist=_extract_string_tuple(raw_data, "onsite_location_whitelist"),
     )
 
 

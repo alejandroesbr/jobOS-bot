@@ -130,103 +130,6 @@ class AssistService:
 
         return "\n".join(context_parts)
 
-    def _can_safely_auto_submit(self, modal: Any) -> tuple[bool, str]:
-        """Valida que el formulario no tenga errores de validación visibles ni campos obligatorios vacíos."""
-        error_selectors = [
-            ".artdeco-inline-feedback--error",
-            "[aria-invalid='true']",
-            ".fb-form-element--error",
-            ".jobs-easy-apply-modal__error",
-        ]
-        for sel in error_selectors:
-            try:
-                errors = modal.locator(sel).all()
-                for err in errors:
-                    if err.is_visible():
-                        err_msg = err.inner_text().strip() or "Error de validación visible"
-                        return False, f"Error en formulario: {err_msg}"
-            except Exception:
-                pass
-
-        try:
-            required_inputs = modal.locator(
-                "input[required]:visible, textarea[required]:visible, select[required]:visible, [aria-required='true']:visible"
-            ).all()
-            for inp in required_inputs:
-                input_type = inp.get_attribute("type") or "text"
-                if input_type in {"hidden", "submit", "button", "checkbox", "radio", "file"}:
-                    continue
-                try:
-                    val = inp.input_value().strip()
-                    if not val:
-                        return False, f"Campo obligatorio vacío (input type={input_type})"
-                except Exception:
-                    pass
-        except Exception:
-            pass
-
-        try:
-            required_radios = modal.locator("fieldset:has(input[type='radio'][required])").all()
-            for fs in required_radios:
-                checked = fs.locator("input[type='radio']:checked").count()
-                if checked == 0:
-                    legend = fs.locator("legend").first
-                    legend_txt = legend.inner_text().strip() if legend.is_visible() else "Pregunta"
-                    return False, f"Opción obligatoria sin responder: {legend_txt}"
-        except Exception:
-            pass
-
-        return True, ""
-
-    def _verify_submission_confirmed(self, page: Page, modal: Any) -> bool:
-        """Verifica en el DOM que el portal haya recibido y procesado la solicitud con éxito."""
-        success_selectors = [
-            "h3:has-text('Tu solicitud se ha enviado')",
-            "h3:has-text('Your application was sent')",
-            ":has-text('Solicitud enviada a')",
-            ":has-text('Application sent to')",
-            "button:has-text('Listo')",
-            "button:has-text('Done')",
-        ]
-        for sel in success_selectors:
-            try:
-                el = page.locator(sel).first
-                if el.is_visible():
-                    console.print("[bold green]✓ Confirmación del portal detectada en pantalla ('Solicitud enviada').[/bold green]")
-                    try:
-                        dismiss_btn = page.locator("button:has-text('Listo'), button:has-text('Done')").first
-                        if dismiss_btn.is_visible():
-                            dismiss_btn.click()
-                    except Exception:
-                        pass
-                    return True
-            except Exception:
-                pass
-
-        page_success_selectors = [
-            ".jobs-s-apply button:has-text('Solicitud enviada')",
-            ".jobs-s-apply button:has-text('Applied')",
-            ".jobs-apply-button:has-text('Solicitud enviada')",
-            ".jobs-apply-button:has-text('Applied')",
-            "span:has-text('Solicitud enviada')",
-        ]
-        for sel in page_success_selectors:
-            try:
-                btn = page.locator(sel).first
-                if btn.is_visible():
-                    console.print("[bold green]✓ Botón de la oferta actualizado a 'Solicitud enviada'.[/bold green]")
-                    return True
-            except Exception:
-                pass
-
-        try:
-            if not modal.is_visible():
-                return True
-        except Exception:
-            return True
-
-        return False
-
     def _detect_closed_or_expired(self, page: Page) -> tuple[bool, str]:
         """Detecta si la vacante fue cerrada, expiró o ya no acepta solicitudes en el portal."""
         closed_signals = [
@@ -279,12 +182,10 @@ class AssistService:
         self,
         page: Page,
         cv_pdf: Path | None,
-        auto_submit: bool = False,
-    ) -> tuple[list[FieldAssistResult], bool]:
+    ) -> list[FieldAssistResult]:
         field_results: list[FieldAssistResult] = []
         max_steps = 8
         step = 0
-        submission_success = False
 
         while step < max_steps:
             step += 1
@@ -449,23 +350,9 @@ class AssistService:
                 "button:has-text('Enviar solicitud'), button:has-text('Submit application'), button[aria-label*='Enviar solicitud']"
             ).first
             if submit_btn.is_visible():
+                # Regla del proyecto: el bot nunca hace clic en enviar; la revisión final es humana.
                 console.print("[bold green]✓ Todos los pasos completados.[/bold green]")
-                if auto_submit:
-                    can_submit, reason = self._can_safely_auto_submit(modal)
-                    if can_submit:
-                        submit_btn.click()
-                        console.print("[bold green]✓ Clic automático seguro en 'Enviar solicitud' realizado.[/bold green]")
-                        page.wait_for_timeout(3500)
-                        submission_success = self._verify_submission_confirmed(page, modal)
-                        if submission_success:
-                            console.print("[bold green]✓ Postulación verificada y confirmada por el portal sin intervención manual.[/bold green]")
-                        else:
-                            console.print("[bold yellow]⚠ No se detectó la confirmación de éxito en pantalla. Dejada pendiente para tu revisión.[/bold yellow]")
-                    else:
-                        console.print(f"[bold red]⚠ Auto-submit pausado por seguridad: {reason}[/bold red]")
-                        console.print("[yellow]Por favor revisa, completa los datos faltantes y envía manualmente en el navegador.[/yellow]")
-                else:
-                    console.print("[bold yellow]Paso final: Revisa y haz clic en 'Enviar solicitud' en el navegador.[/bold yellow]")
+                console.print("[bold yellow]Paso final: Revisa y haz clic en 'Enviar solicitud' en el navegador.[/bold yellow]")
                 break
 
             review_btn = modal.locator("button:has-text('Revisar'), button:has-text('Review')").first
@@ -484,7 +371,7 @@ class AssistService:
 
             break
 
-        return field_results, submission_success
+        return field_results
 
     def _fill_standard_form(
         self,
@@ -557,7 +444,6 @@ class AssistService:
         self,
         url: str,
         application_id: int | None = None,
-        auto_submit: bool = False,
         headless: bool = False,
     ) -> AssistReport:
         subtitle = f"Vacante #{application_id} | URL: {url}" if application_id else f"URL: {url}"
@@ -650,7 +536,6 @@ class AssistService:
                 return AssistReport(url, 0, 0, 0, 0)
 
             cv_pdf = self._find_candidate_cv_pdf()
-            submission_success = False
 
             try:
                 modal_opened = self._open_easy_apply_if_present(page)
@@ -665,7 +550,7 @@ class AssistService:
                         is_modal_active = False
 
                 if is_modal_active:
-                    field_results, submission_success = self._handle_easy_apply_modal(page, cv_pdf, auto_submit=auto_submit)
+                    field_results = self._handle_easy_apply_modal(page, cv_pdf)
                 else:
                     field_results = self._fill_standard_form(page, cv_pdf)
             except Exception as ex:
@@ -682,37 +567,11 @@ class AssistService:
                 console.print(f"[bold yellow]Campos sugeridos con IA (Borde Amarillo): {suggested_count}[/bold yellow]")
                 console.print("[yellow]Por favor revisa y edita los campos en amarillo en el navegador antes de enviar.[/yellow]")
 
-            user_confirmed_sent = False
-            if auto_submit:
-                if submission_success:
-                    user_confirmed_sent = True
-                else:
-                    console.print(
-                        "[yellow]⚠ Postulación automática no pudo confirmarse (faltan datos requeridos o verificación falló). Permanece en 'Pendiente'.[/yellow]"
-                    )
-                    user_confirmed_sent = False
-            else:
-                console.print("\n[bold cyan]¿La postulación fue enviada con éxito en el navegador? [S/n]: [/bold cyan]", end="")
-                try:
-                    resp = input().strip().lower()
-                    user_confirmed_sent = resp in {"", "s", "si", "sí", "y", "yes"}
-                except EOFError:
-                    user_confirmed_sent = True
+            user_confirmed_sent = self._ask_yes_no("¿Enviaste la postulación en el navegador? [s/N]: ")
 
             saved_answers = 0
             if user_confirmed_sent:
-                for f in field_results:
-                    if not f.is_confident and f.filled_value:
-                        norm_q = normalize_form_question(f.label)
-                        if norm_q:
-                            self.repository.upsert_qa_memory(
-                                question_norm=norm_q,
-                                raw_example=f.label,
-                                answer=f.filled_value,
-                                category=QuestionCategory.GENERAL,
-                                source=AnswerSource.USER_CONFIRMED,
-                            )
-                            saved_answers += 1
+                saved_answers = self._save_confirmed_suggestions(field_results)
 
                 if application_id is not None:
                     rec = self.repository.find_by_id(application_id)
@@ -733,6 +592,45 @@ class AssistService:
                 suggested_fields=suggested_count,
                 saved_answers=saved_answers,
             )
+
+    def _ask_yes_no(self, prompt: str) -> bool:
+        """Pregunta en la terminal; cualquier respuesta distinta de 'sí' (incluido ENTER o EOF) cuenta como no."""
+        console.print(f"\n[bold cyan]{prompt}[/bold cyan]", end="")
+        try:
+            return input().strip().lower() in {"s", "si", "sí", "y", "yes"}
+        except EOFError:
+            return False
+
+    def _save_confirmed_suggestions(self, field_results: list[FieldAssistResult]) -> int:
+        """Guarda en memoria solo las respuestas de IA que el usuario confirma o corrige en la terminal."""
+        saved = 0
+        for f in field_results:
+            if f.is_confident or not f.filled_value:
+                continue
+            norm_q = normalize_form_question(f.label)
+            if not norm_q:
+                continue
+            console.print(
+                f"\n[yellow]Pregunta:[/yellow] {f.label}\n[yellow]Sugerencia IA:[/yellow] {f.filled_value}\n"
+                "[cyan]ENTER = no guardar | 's' = guardar tal cual | otro texto = guardar ese texto: [/cyan]",
+                end="",
+            )
+            try:
+                reply = input().strip()
+            except EOFError:
+                break
+            if not reply:
+                continue
+            answer = f.filled_value if reply.lower() in {"s", "si", "sí", "y", "yes"} else reply
+            self.repository.upsert_qa_memory(
+                question_norm=norm_q,
+                raw_example=f.label,
+                answer=answer,
+                category=QuestionCategory.GENERAL,
+                source=AnswerSource.USER_CONFIRMED,
+            )
+            saved += 1
+        return saved
 
     def _extract_field_label(self, element: Any, page: Page) -> str:
         aria = element.get_attribute("aria-label")

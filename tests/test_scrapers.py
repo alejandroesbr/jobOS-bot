@@ -182,3 +182,49 @@ def test_scan_service_end_to_end_flow_with_mocked_orchestrator(
     assert all_apps[0].title == "Desarrollador Full Stack Junior"
     assert all_apps[0].times_applied == 0
     assert all_apps[0].status == ApplicationStatus.PENDING
+
+
+def test_scraper_reports_error_when_search_pages_show_no_cards(filter_config: FilterConfig, monkeypatch: pytest.MonkeyPatch) -> None:
+    from src.adapters.scrapers.base import PortalScrapeError
+
+    monkeypatch.setattr("src.adapters.scrapers.base.human_delay", lambda *_: None)
+    monkeypatch.setattr("src.adapters.scrapers.base.smooth_scroll", lambda *_a, **_k: None)
+    scraper = GetOnBrdScraper()
+    monkeypatch.setattr(scraper, "extract_cards", lambda _page: [])
+
+    with pytest.raises(PortalScrapeError, match="captcha"):
+        scraper.scan(MagicMock(), filter_config, limit=5)
+
+
+
+def test_scan_service_skips_invalid_offer_without_losing_the_rest(
+    repo: ApplicationRepository,
+    filter_config: FilterConfig,
+) -> None:
+    from src.adapters.scrapers.orchestrator import PortalScanResult
+
+    def offer(company: str, url: str) -> JobOffer:
+        return JobOffer(
+            portal=PortalName.GETONBRD,
+            title="Desarrollador Full Stack Junior",
+            company=company,
+            location="Remoto",
+            modality=WorkModality.REMOTE,
+            url=url,
+            description="Buscamos React, Node.js y PostgreSQL.",
+        )
+
+    mock_orch = MagicMock(spec=ScraperOrchestrator)
+    mock_orch.run_scan.return_value = {
+        PortalName.GETONBRD: PortalScanResult(
+            portal=PortalName.GETONBRD,
+            offers=(offer("---", "https://getonbrd.com/jobs/bad"), offer("Acme", "https://getonbrd.com/jobs/good")),
+        )
+    }
+
+    summary = ScanService(repository=repo, config=filter_config, orchestrator=mock_orch).run_scan_pipeline(
+        portals=[PortalName.GETONBRD]
+    )
+
+    assert summary.new_applications == 1
+    assert [r.company for r in repo.find_all()] == ["Acme"]

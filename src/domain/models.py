@@ -171,6 +171,9 @@ class ApplicationRecord:
     portal: PortalName | None = None
     submissions: tuple[SubmissionAttempt, ...] = ()
     keywords: tuple[KeywordMatch, ...] = ()
+    notion_synced_status: ApplicationStatus | None = None
+    cv_summary_cache: str | None = None
+    cv_pdf_path: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

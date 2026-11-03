@@ -34,13 +34,15 @@ jobs:
           restore-keys: |
             jobos-db-
 
+      # El contexto `secrets` no está disponible en `if:`; se comprueba dentro del script.
       - name: Setup session cookies if available
-        if: ${{ secrets.PLAYWRIGHT_STORAGE_STATE != '' }}
         env:
           PLAYWRIGHT_STORAGE_STATE: ${{ secrets.PLAYWRIGHT_STORAGE_STATE }}
         run: |
-          mkdir -p data
-          echo "$PLAYWRIGHT_STORAGE_STATE" > data/storage_state.json
+          if [ -n "$PLAYWRIGHT_STORAGE_STATE" ]; then
+            mkdir -p data
+            printf '%s' "$PLAYWRIGHT_STORAGE_STATE" > data/storage_state.json
+          fi
 
       - name: Run multi-portal scan (single-thread)
         env:

@@ -15,17 +15,17 @@ flowchart TD
     B --> C{"Evaluación de Compatibilidad\n(src/domain/matcher.py)"}
     C -->|Título Senior / +5 años / Stack ajeno| D["Hard Reject (0%)\nDescarte inmediato sin abrir detalle"]
     C -->|Match < 40%| E["Descartada por baja afinidad\nNo se registra"]
-    C -->|Match >= 40%| F["Registro en SQLite (data/jobs.db)\n(dedup_key único, times_applied=1)"]
+    C -->|Match >= 40%| F["Registro en SQLite (data/jobs.db)\n(estado Pendiente, times_applied=0)"]
 
     F --> G["3. Radar y Estadísticas\n(python cli.py stats)"]
     F --> H["4. Postulación Asistida\n(python cli.py assist <id1> [id2...])"]
     
     H --> I["Navegador Visible (Playwright)\nCarga sesión persistente"]
     I --> J["Detecta 'Solicitud sencilla'\nAbre modal automáticamente"]
-    J --> K["Adjunta PDF de tu CV\n(config/CV_Ancizar_Escobar.pdf)"]
+    J --> K["Adjunta PDF de tu CV\n(config/cv.pdf)"]
     K --> L["Autocompleta Formulario\nVerde: Memoria local (RapidFuzz >= 85%)\nAmarillo: Sugerencia Gemini"]
     L --> M["Avance de Pasos\n(Contacto -> CV -> Preguntas -> Revisión)"]
-    M --> N["Envío\n- Manual: Clic final del usuario\n- Automático: Flag --auto-submit"]
+    M --> N["Envío\nClic final del usuario (el bot nunca envía)"]
     N --> O["Actualiza estado a 'Enviado' en SQLite"]
 
     O --> P["5. Sincronización en la Nube\n(python cli.py sync)"]
@@ -55,7 +55,7 @@ Abre el navegador Chromium en modo visible utilizando tu perfil persistente en d
 ### 2. `python cli.py scan` — Motor de Escaneo Multi-Portal
 Escanea de forma secuencial en un solo hilo (*single-thread*) los portales de empleo configurados, respetando pausas humanas aleatorias (2.5s a 6.0s) para evitar bloqueos anti-bot.
 
-* **¿Para qué sirve?:** Descubre ofertas de trabajo, extrae la información limpia, evalúa las reglas de descarte (*Hard Rejects*) y el puntaje de afinidad (`Match %`), y realiza un `UPSERT` en SQLite. Si una oferta ya existía (republicada o en otro portal), incrementa `times_applied = times_applied + 1` sin duplicar la fila.
+* **¿Para qué sirve?:** Descubre ofertas de trabajo, extrae la información limpia, evalúa las reglas de descarte (*Hard Rejects*) y el puntaje de afinidad (`Match %`), y registra las compatibles en SQLite como `Pendiente`. Si una oferta ya existía (republicada, en otro portal o con un cargo casi igual de la misma empresa), reutiliza la fila sin duplicarla. Las ofertas presenciales fuera de Barranquilla y las que piden más años de experiencia de los configurados se descartan.
 * **Ejemplos de ejecución:**
   ```bash
   # Escanear todos los portales habilitados (por defecto 10 vacantes por portal en segundo plano)
@@ -78,7 +78,7 @@ Escanea de forma secuencial en un solo hilo (*single-thread*) los portales de em
 ---
 
 ### 3. `python cli.py assist` — Copiloto de Postulación en Lote
-Abre la vacante en el navegador con tu sesión persistente, detecta si tiene botón de *"Solicitud sencilla / Easy Apply / Postularme"*, autocompleta el formulario paso a paso, adjunta tu CV en PDF y actualiza el estado a `Enviado`.
+Abre la vacante en el navegador con tu sesión persistente, detecta si tiene botón de *"Solicitud sencilla / Easy Apply / Postularme"*, autocompleta el formulario paso a paso y adjunta tu CV en PDF. Se detiene antes de enviar; solo marca `Enviado` si confirmas en la terminal que enviaste la postulación.
 
 * **Modos de uso:**
 
@@ -92,26 +92,20 @@ Abre la vacante en el navegador con tu sesión persistente, detecta si tiene bot
   python cli.py assist 1,3,4,8
   ```
 
-  #### B. Modo 100% Automático / Desatendido (`--all` y `--auto-submit`)
-  Si no quieres tocar el ratón, ni ingresar IDs, ni dar clic en *"Enviar solicitud"*, procesa toda la cola con:
+  #### B. Cola de todas las pendientes o por afinidad (`--all`, `--min-score`, `--top`)
   ```bash
-  # Postular a TODAS las vacantes pendientes en cola sin confirmación manual
-  python cli.py assist --all --auto-submit
+  # Encolar todas las vacantes pendientes
+  python cli.py assist --all
 
-  # Postular solo a vacantes con afinidad alta (ej. Match >= 70%)
-  python cli.py assist --all --min-score 70 --auto-submit
+  # Solo vacantes con afinidad alta (ej. Match >= 70%)
+  python cli.py assist --all --min-score 70
 
-  # Ejecutar en segundo plano sin abrir ventanas gráficas
-  python cli.py assist --all --auto-submit --headless
+  # Las mejores 5 vacantes pendientes con Match >= 70%
+  python cli.py assist --min-score 70 --top 5
   ```
+  En todos los casos el bot llena el formulario y **se detiene antes de enviar**: tú revisas y haces el clic final. Después confirmas en la terminal si se envió (por defecto *no*) y decides qué respuestas sugeridas por la IA se guardan en memoria.
 
-  #### C. Cola por Afinidad Prioritaria (`--min-score` y `--top`)
-  ```bash
-  # Abre automáticamente en cola las mejores 5 ofertas pendientes con Match >= 70%
-  python cli.py assist --min-score 70 --top 5 --auto-submit
-  ```
-
-  #### D. Modo Interactivo (sin argumentos)
+  #### C. Modo Interactivo (sin argumentos)
   ```bash
   python cli.py assist
   ```
@@ -119,25 +113,18 @@ Abre la vacante en el navegador con tu sesión persistente, detecta si tiene bot
 
 ---
 
-### 4. `python cli.py autopilot` — Piloto Automático Autónomo End-to-End
-Ejecuta el ciclo de vida completo de jobOS-bot de forma **100% desatendida y sin intervención humana**:
+### 4. `python cli.py autopilot` — Escaneo y Sincronización Desatendidos
+Ejecuta sin intervención las fases que no postulan:
 1. **Escaneo:** Busca ofertas recientes en todos los portales configurados.
-2. **Evaluación:** Filtra descartes duros y calcula el puntaje de afinidad con tu perfil.
-3. **Postulación Asistida:** Abre Playwright, adjunta tu CV, responde preguntas y realiza el envío seguro (`--auto-submit`) de cada vacante que califique.
-4. **Sincronización:** Actualiza SQLite, empuja los nuevos envíos a Notion CRM y detecta vacantes estancadas tras 7 días.
+2. **Evaluación:** Filtra descartes duros y calcula el puntaje de afinidad; las compatibles quedan en `Pendiente`.
+3. **Sincronización:** Actualiza Notion y marca seguimientos tras 7 días.
+
+**Nunca postula.** Para postular usa `python cli.py assist`, que se detiene antes del envío.
 
 * **Ejemplos de uso:**
   ```bash
-  # Ejecución autónoma completa estándar (Match >= 50%)
   python cli.py autopilot
-
-  # Exigir mayor afinidad (ej. solo vacantes con Match >= 65%)
-  python cli.py autopilot --min-score 65
-
-  # Ejecutar en segundo plano silencioso (ideal para cron o servidores)
   python cli.py autopilot --headless
-
-  # Escanear portales específicos y limitar a 20 ofertas por portal
   python cli.py autopilot --portal linkedin,getonbrd --limit 20
   ```
 
@@ -164,6 +151,25 @@ Compara la descripción de la vacante seleccionada contra tu plantilla base en M
   ```bash
   python cli.py tailor 4
   ```
+
+---
+
+### 6b. `python cli.py cv` — CV en PDF Adaptado a Cada Vacante
+Genera un PDF de tu hoja de vida por vacante en `cvs/<id>_<empresa>_<cargo>.pdf`, listo para que lo envíes tú. **No postula.**
+
+* **¿Qué adapta?:**
+  1. Ordena tus habilidades y categorías poniendo primero las que pide la oferta.
+  2. Pone primero los proyectos que usan el stack de la oferta.
+  3. Si hay `GEMINI_API_KEY`, reescribe el resumen profesional enfocado en la vacante. Si el texto menciona una tecnología o una cifra que no está en tu `config/cv_base.md`, se descarta y se usa tu resumen original.
+* **Nunca agrega** tecnologías, años ni experiencia que no estén en tu CV base. Un PDF ya generado se reutiliza; usa `--force` para regenerarlo.
+* **Ejemplos:**
+  ```bash
+  python cli.py cv 4
+  python cli.py cv 4 7 9
+  python cli.py cv --all --min-score 60
+  python cli.py cv 4 --force
+  ```
+* **Requisito:** `config/cv_base.md` con tus datos reales (cópialo desde `config/cv_base.example.md`).
 
 ---
 
@@ -214,9 +220,9 @@ Vuelca los registros de SQLite a formatos estándar para análisis en hojas de c
 
 ---
 
-## 3. Automatización 100% Desatendida (Sin Intervención Humana)
+## 3. Escaneo Diario Desatendido
 
-Si deseas que el bot busque vacantes nuevas, complete los formularios, adjunte tu CV y envíe las postulaciones todos los días sin que tengas que abrir una terminal ni hacer un solo clic:
+Si deseas que el bot busque vacantes nuevas y sincronice Notion todos los días sin abrir una terminal (las postulaciones siempre las envías tú con `assist`):
 
 ### Opción A: Script Autopilot bajo demanda
 Ejecuta el script unificado [`scripts/autopilot.sh`](../scripts/autopilot.sh) en cualquier momento:
@@ -225,7 +231,7 @@ Ejecuta el script unificado [`scripts/autopilot.sh`](../scripts/autopilot.sh) en
 ```
 O con opciones avanzadas (segundo plano silencioso y afinidad estricta):
 ```bash
-./scripts/autopilot.sh --headless --min-score 60
+./scripts/autopilot.sh --headless --limit 20
 ```
 
 ### Opción B: Cronjob Diario en Linux Debian (Recomendado)
@@ -237,9 +243,9 @@ Configura una tarea programada para que se ejecute de lunes a viernes en los hor
    ```
 2. Agrega la siguiente línea al final del archivo:
    ```cron
-   0 9,14 * * 1-5 /home/alejandro/Developer/jobOS-bot/scripts/autopilot.sh --headless >> /home/alejandro/Developer/jobOS-bot/data/autopilot.log 2>&1
+   0 9,14 * * 1-5 /ruta/a/jobOS-bot/scripts/autopilot.sh --headless >> /ruta/a/jobOS-bot/data/autopilot.log 2>&1
    ```
-3. Guarda y sal. El bot trabajará por ti en segundo plano y registrará todo el progreso en `data/autopilot.log`.
+3. Guarda y sal. El bot escaneará en segundo plano y registrará el progreso en `data/autopilot.log`. Revisa las vacantes nuevas con `python cli.py assist`.
 
 ---
 
@@ -287,5 +293,5 @@ Los servidores gratuitos de Google AI Studio experimentan picos de saturación e
 ### ¿Dónde configuro mis datos personales y CV?
 - **Perfil ATS:** Edita [`config/profile.yaml`](../config/profile.yaml) (nombre, teléfono, ciudad, salario, años de experiencia).
 - **Filtros de Búsqueda:** Edita [`config/filters.yaml`](../config/filters.yaml) (tecnologías core, whitelists, títulos buscados).
-- **CV en PDF:** Coloca tu archivo en [`config/CV_Ancizar_Escobar.pdf`](../config/CV_Ancizar_Escobar.pdf) para que el bot lo adjunte automáticamente.
+- **CV en PDF:** Coloca tu archivo en `config/cv.pdf` para que el bot lo adjunte automáticamente (los `*.pdf` están en `.gitignore`).
 

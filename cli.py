@@ -15,6 +15,7 @@ from src.config_loader import load_filter_config
 from src.domain.models import ApplicationStatus, PortalName
 from src.services.assist_service import AssistService
 from src.services.career_service import CareerService
+from src.services.cv_service import CvService
 from src.services.scan_service import ScanService
 from src.ui.console import (
     console,
@@ -50,8 +51,8 @@ def cli() -> None:
 )
 @click.option(
     "--headless/--no-headless",
-    default=True,
-    help="Ejecutar el navegador de forma invisible (headless) o visible.",
+    default=False,
+    help="Ejecutar el navegador de forma invisible (headless) o visible. Con HEADLESS=true en el entorno siempre es invisible.",
 )
 @click.option(
     "--db-path",
@@ -223,6 +224,63 @@ def tailor_cmd(job_id: int, db_path: str) -> None:
         repo.close()
 
 
+@cli.command(name="cv")
+@click.argument("targets", nargs=-1, required=False)
+@click.option("--all", "-a", "all_pending", is_flag=True, default=False, help="Generar CV para todas las vacantes pendientes.")
+@click.option("--min-score", default=None, type=int, help="Con --all, solo vacantes con afinidad mínima (ej. 60).")
+@click.option("--force", is_flag=True, default=False, help="Regenerar el PDF aunque ya exista.")
+@click.option("--db-path", default="data/jobs.db", help="Ruta al archivo SQLite local.")
+def cv_cmd(targets: tuple[str, ...], all_pending: bool, min_score: int | None, force: bool, db_path: str) -> None:
+    """Genera un PDF de tu CV adaptado a cada vacante (ej. 'cv 4 7' o 'cv --all --min-score 60'). No postula."""
+    from src.adapters.pdf.cv_renderer import PlaywrightPdfRenderer
+
+    if not Path(db_path).is_file():
+        print_error(f"Base de datos no encontrada en '{db_path}'. Ejecuta un escaneo primero con 'scan'.")
+        sys.exit(1)
+
+    repo = ApplicationRepository(db_path)
+    try:
+        ids: list[int] = []
+        for t in targets:
+            for token in t.replace(",", " ").split():
+                if token.isdigit():
+                    ids.append(int(token))
+                else:
+                    print_warning(f"'{token}' no es un ID numérico. Omitiendo.")
+
+        if all_pending:
+            pending = repo.find_all(status=ApplicationStatus.PENDING, limit=500)
+            ids += [r.id for r in pending if min_score is None or r.match_score >= min_score]
+
+        ids = list(dict.fromkeys(ids))
+        if not ids:
+            print_warning("No hay vacantes para procesar. Indica IDs (ej. 'cv 4 7') o usa '--all'.")
+            return
+
+        service = CvService(repository=repo)
+        print_banner("jobOS-bot — CV Personalizado por Vacante", f"{len(ids)} vacante(s) — salida en '{service.output_dir}/'")
+        generated = 0
+        with PlaywrightPdfRenderer() as renderer:
+            for app_id in ids:
+                try:
+                    result = service.generate(app_id, renderer, force=force)
+                except FileNotFoundError as ex:
+                    print_error(str(ex))
+                    sys.exit(1)
+                except Exception as ex:
+                    print_error(f"Vacante #{app_id}: {ex}")
+                    continue
+                if result.reused_existing:
+                    console.print(f"[dim]#{app_id} ya tenía CV:[/dim] [cyan]{result.pdf_path}[/cyan] [dim](usa --force para regenerar)[/dim]")
+                else:
+                    generated += 1
+                    console.print(f"[green]✓ #{app_id}[/green] [cyan]{result.pdf_path}[/cyan] [dim](resumen: {result.summary_source})[/dim]")
+
+        console.print(f"\n[bold green]CV generados: {generated}/{len(ids)}[/bold green]")
+    finally:
+        repo.close()
+
+
 @cli.command(name="prep")
 @click.argument("job_id", type=int)
 @click.option("--db-path", default="data/jobs.db", help="Ruta al archivo SQLite local.")
@@ -269,7 +327,6 @@ def sync_cmd(db_path: str) -> None:
 @click.option("--all", "-a", "all_pending", is_flag=True, default=False, help="Procesar todas las vacantes pendientes en cola automáticamente sin preguntar.")
 @click.option("--min-score", default=None, type=int, help="Filtrar vacantes con puntaje mínimo de afinidad (ej. 70).")
 @click.option("--top", default=None, type=int, help="Procesar las mejores N vacantes pendientes en cola.")
-@click.option("--auto-submit", is_flag=True, default=False, help="Hacer clic de envío final automáticamente.")
 @click.option("--headless", is_flag=True, default=False, help="Ejecutar el navegador en segundo plano sin interfaz gráfica.")
 @click.option("--db-path", default="data/jobs.db", help="Ruta al archivo SQLite local.")
 def assist_cmd(
@@ -277,7 +334,6 @@ def assist_cmd(
     all_pending: bool,
     min_score: int | None,
     top: int | None,
-    auto_submit: bool,
     headless: bool,
     db_path: str,
 ) -> None:
@@ -373,7 +429,6 @@ def assist_cmd(
                 service.run_assist(
                     target_url,
                     application_id=target_id,
-                    auto_submit=auto_submit,
                     headless=headless,
                 )
                 completed_count += 1
@@ -408,21 +463,10 @@ def assist_cmd(
     help="Límite máximo de ofertas a inspeccionar por portal. Por defecto 15.",
 )
 @click.option(
-    "--min-score",
-    default=50,
-    type=int,
-    help="Puntaje mínimo de afinidad para postular automáticamente. Por defecto 50%.",
-)
-@click.option(
     "--headless",
     is_flag=True,
     default=False,
     help="Ejecutar navegadores en segundo plano sin interfaz gráfica.",
-)
-@click.option(
-    "--auto-submit/--no-auto-submit",
-    default=True,
-    help="Enviar automáticamente los formularios válidos sin confirmación manual.",
 )
 @click.option(
     "--db-path",
@@ -432,15 +476,13 @@ def assist_cmd(
 def autopilot_cmd(
     portal_arg: str,
     limit_arg: int,
-    min_score: int,
     headless: bool,
-    auto_submit: bool,
     db_path: str,
 ) -> None:
-    """Ejecuta el ciclo autónomo completo: Escaneo -> Postulación Automática -> Sync Notion."""
+    """Ejecuta el ciclo desatendido: Escaneo -> Sync Notion. Nunca postula; usa 'assist' para eso."""
     print_banner(
-        "jobOS-bot — Piloto Automático Autónomo",
-        "Pipeline desatendido: 1. Escaneo Multi-Portal -> 2. Auto-Postulación Segura -> 3. Sync Notion",
+        "jobOS-bot — Piloto Automático",
+        "Pipeline desatendido: 1. Escaneo Multi-Portal -> 2. Sync Notion (sin postular)",
     )
 
     portals: list[PortalName] = []
@@ -472,45 +514,8 @@ def autopilot_cmd(
         )
         print_scan_summary(scan_summary)
 
-        # FASE 2: Postulación automática en cola
-        console.print(f"\n[bold cyan]━━━ FASE 2: Postulación automática (Afinidad >= {min_score}%) ━━━[/bold cyan]\n")
-        pending_records = repo.find_all(status=ApplicationStatus.PENDING, limit=100)
-        qualifying = [r for r in pending_records if r.match_score >= min_score]
-
-        if not qualifying:
-            console.print(
-                f"[yellow]No hay vacantes pendientes con afinidad >= {min_score}%. Pasando a sincronización.[/yellow]\n"
-            )
-        else:
-            assist_service = AssistService(repository=repo)
-            total = len(qualifying)
-            processed_count = 0
-            for idx, rec in enumerate(qualifying, 1):
-                url = rec.submissions[-1].canonical_url if rec.submissions else None
-                if not url:
-                    continue
-                print_banner(
-                    f"Autopilot — Postulando ({idx}/{total})",
-                    f"Vacante #{rec.id}: {rec.company} — {rec.title} | Match: {rec.match_score}%",
-                )
-                try:
-                    assist_service.run_assist(
-                        url,
-                        application_id=rec.id,
-                        auto_submit=auto_submit,
-                        headless=headless,
-                    )
-                    processed_count += 1
-                except KeyboardInterrupt:
-                    console.print("\n[yellow]Autopilot pausado por el usuario (Ctrl+C).[/yellow]")
-                    break
-                except Exception as ex:
-                    print_error(f"Error procesando vacante #{rec.id}: {ex}")
-
-            console.print(f"\n[bold green]✓ Postulaciones procesadas: {processed_count}/{total}[/bold green]\n")
-
-        # FASE 3: Sincronización y CRM
-        console.print("\n[bold cyan]━━━ FASE 3: Sincronización con Notion CRM y Seguimiento ━━━[/bold cyan]\n")
+        # FASE 2: Sincronización y CRM
+        console.print("\n[bold cyan]━━━ FASE 2: Sincronización con Notion CRM y Seguimiento ━━━[/bold cyan]\n")
         try:
             career_service = CareerService(repository=repo)
             report = career_service.sync_with_notion()

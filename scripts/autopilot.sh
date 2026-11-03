@@ -1,21 +1,20 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# jobOS-bot — Autopilot Runner (100% Autónomo)
+# jobOS-bot — Autopilot Runner (escaneo desatendido, nunca postula)
 # ==============================================================================
-# Este script ejecuta el pipeline completo sin intervención manual:
-#   1. Escanea portales de empleo (LinkedIn, GetOnBrd, Computrabajo)
-#   2. Evalúa y calcula afinidad contra tu perfil y CV
-#   3. Abre el navegador y autocompleta formularios (Easy Apply)
-#   4. Envía de forma segura las solicitudes (--auto-submit)
-#   5. Sincroniza con Notion y detecta follow-ups a 7 días
+# Este script ejecuta sin intervención manual:
+#   1. Escanea portales de empleo (LinkedIn, GetOnBrd, Computrabajo, ...)
+#   2. Evalúa la afinidad contra tu perfil y registra las compatibles como 'Pendiente'
+#   3. Sincroniza con Notion y detecta follow-ups a 7 días
+# Las postulaciones se envían siempre a mano con `python cli.py assist`.
 #
 # Uso manual:
 #   ./scripts/autopilot.sh
-#   ./scripts/autopilot.sh --headless --min-score 60
+#   ./scripts/autopilot.sh --headless --limit 20
 #
 # Para automatizar con cron (ejecutar diario a las 9:00 AM y 2:00 PM):
 #   crontab -e
-#   0 9,14 * * 1-5 /home/alejandro/Developer/jobOS-bot/scripts/autopilot.sh --headless >> /home/alejandro/Developer/jobOS-bot/data/autopilot.log 2>&1
+#   0 9,14 * * 1-5 /ruta/a/jobOS-bot/scripts/autopilot.sh --headless >> /ruta/a/jobOS-bot/data/autopilot.log 2>&1
 # ==============================================================================
 
 set -eo pipefail

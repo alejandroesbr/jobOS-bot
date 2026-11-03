@@ -1,9 +1,16 @@
+import hashlib
 import re
 import unicodedata
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 COMPANY_SUFFIX_PATTERN = re.compile(
     r"\b(?:s\.?a\.?s\.?|s\.?a\.?|ltda\.?|inc\.?|llc\.?|corp\.?|corporation|b\.?v\.?|gmbh|colombia|latam)\b",
+    re.IGNORECASE,
+)
+
+# Empresas ocultas por el portal: el nombre no identifica la vacante, así que no sirve para deduplicar.
+ANONYMOUS_COMPANY_PATTERN = re.compile(
+    r"\b(?:confidencial|confidential|anonima|anonimo|anonymous|reservad[ao]|importante\s+empresa)\b",
     re.IGNORECASE,
 )
 
@@ -76,11 +83,19 @@ def normalize_job_title(raw_title: str) -> str:
     return collapse_whitespace(text)
 
 
-def build_dedup_key(company: str, title: str) -> str:
+def is_anonymous_company(company: str) -> bool:
+    return bool(ANONYMOUS_COMPANY_PATTERN.search(strip_accents(company).lower()))
+
+
+def build_dedup_key(company: str, title: str, canonical_url: str | None = None) -> str:
     company_norm = normalize_company_name(company)
     title_norm = normalize_job_title(title)
     if not company_norm or not title_norm:
         raise ValueError("Both company and title must contain valid alphanumeric characters.")
+    if canonical_url and is_anonymous_company(company):
+        # Dos "Empresa Confidencial" con el mismo cargo suelen ser vacantes distintas: se separan por URL.
+        url_hash = hashlib.sha1(canonical_url.encode("utf-8")).hexdigest()[:10]
+        return f"{company_norm}::{title_norm}::{url_hash}"
     return f"{company_norm}::{title_norm}"
 
 

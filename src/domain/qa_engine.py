@@ -14,7 +14,7 @@ from src.domain.models import (
 from src.domain.text_normalizer import normalize_form_question
 
 SALARY_INTENT_PATTERN = re.compile(
-    r"\b(?:salario|sueldo|aspiracion|expectativa\s+salarial|remuneracion|pretension|salary|compensation|pay|rate)\b",
+    r"\b(?:salario|sueldo|aspiracion|expectativa\s+salarial|remuneracion|pretension|salary|compensation|expected\s+pay|monthly\s+rate)\b",
     re.IGNORECASE,
 )
 
@@ -30,6 +30,31 @@ COP_CURRENCY_PATTERN = re.compile(
 
 EXPERIENCE_INTENT_PATTERN = re.compile(
     r"\b(?:experiencia|anos?|anios?|experience|years|cuanto\s+tiempo|how\s+long)\b",
+    re.IGNORECASE,
+)
+
+YEARS_QUESTION_PATTERN = re.compile(
+    r"\b(?:anos?|anios?|years?|cuanto\s+tiempo|how\s+long)\b",
+    re.IGNORECASE,
+)
+
+# Preguntas sobre otra persona (referencias, jefes, contactos): nunca se responden con datos del candidato.
+THIRD_PARTY_PATTERN = re.compile(
+    r"\b(?:referencias?|referen\w*|references?|referees?|jefe|supervisor|manager|gerente|"
+    r"empleador\s+anterior|previous\s+employer|contacto\s+de\s+emergencia|emergency\s+contact)\b",
+    re.IGNORECASE,
+)
+
+# Preguntas abiertas que requieren redacción propia del candidato.
+OPEN_ENDED_PATTERN = re.compile(
+    r"\b(?:describe|describa|describenos|cuentanos|cuentenos|explica|explique|explain|tell\s+us|"
+    r"por\s+que|why|carta\s+de\s+presentacion|cover\s+letter|motivacion|motivation)\b",
+    re.IGNORECASE,
+)
+
+# Preguntas de puntuación en escala (ej. "del 1 al 10"): el formato no coincide con las respuestas guardadas.
+SCALE_PATTERN = re.compile(
+    r"\b(?:\d+\s*(?:to|a|al|-)\s*\d+|escala|scale)\b",
     re.IGNORECASE,
 )
 
@@ -310,17 +335,28 @@ class QuestionAnswerEngine:
                 is_confident_match=True,
             )
 
-        # 2. ATS Knock-out Rules: Salary Intent & Currency
+        # 2. Preguntas sobre terceros, de redacción libre o de escala: sin respuesta automática segura
+        if any(p.search(query_norm) for p in (THIRD_PARTY_PATTERN, OPEN_ENDED_PATTERN, SCALE_PATTERN)):
+            return QuestionMatch(
+                question_norm=query_norm,
+                answer="",
+                similarity_score=0.0,
+                category=QuestionCategory.GENERAL,
+                source=AnswerSource.PROFILE_SEED,
+                is_confident_match=False,
+            )
+
+        # 3. ATS Knock-out Rules: Salary Intent & Currency
         if SALARY_INTENT_PATTERN.search(query_norm):
             return self._handle_salary_query(query_norm, portal, is_numeric_input)
 
-        # 3. ATS Knock-out Rules: Experience Years Intent
+        # 4. ATS Knock-out Rules: Experience Years Intent
         if EXPERIENCE_INTENT_PATTERN.search(query_norm):
             match = self._handle_experience_query(query_norm, is_numeric_input)
             if match is not None:
                 return match
 
-        # 4. RapidFuzz similarity across all registered questions
+        # 5. RapidFuzz similarity across all registered questions
         return self._fuzzy_match_general(query_norm, is_numeric_input)
 
     def _handle_salary_query(
@@ -379,6 +415,14 @@ class QuestionAnswerEngine:
     ) -> QuestionMatch | None:
         tech = self._detect_technology(query_norm)
         if not tech:
+            return None
+
+        # Una palabra cualquiera tras 'en/con' (ej. "experiencia en proyectos") solo cuenta como
+        # tecnología si la pregunta pide explícitamente años o tiempo.
+        known_techs = {t.lower() for t in KNOWN_TECH_ALIASES.values()}
+        if self.profile:
+            known_techs |= {t.lower() for t in self.profile.experience_years}
+        if tech.lower() not in known_techs and not YEARS_QUESTION_PATTERN.search(query_norm):
             return None
 
         # Filter candidate keys for the same target technology

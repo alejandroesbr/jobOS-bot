@@ -9,6 +9,9 @@ logger = logging.getLogger(__name__)
 
 
 class GeminiClient:
+    # True cuando la última respuesta de tailor/prep es un texto de respaldo y no debe cachearse.
+    last_call_failed: bool = False
+
     def __init__(
         self,
         api_key: str | None = None,
@@ -32,8 +35,9 @@ class GeminiClient:
         input_type: str,
         candidate_profile_context: str,
     ) -> str:
+        # Sin IA no se inventa texto de relleno: el campo queda vacío para que lo llene el usuario.
         if not self._client:
-            return "Experiencia demostrable en proyectos reales acorde al perfil."
+            return ""
 
         prompt = (
             "Eres un copiloto ATS experto para un desarrollador de software Junior/Mid en Colombia. "
@@ -65,9 +69,7 @@ class GeminiClient:
                 continue
 
         logger.warning("Fallo al consultar Gemini (modelos intentados: %s): %s", models_to_try, last_error)
-        if input_type == "number":
-            return "1"
-        return "Experiencia demostrable en proyectos reales acorde al perfil."
+        return ""
 
     def tailor_cv(
         self,
@@ -75,6 +77,7 @@ class GeminiClient:
         job_description: str,
         cv_base_markdown: str,
     ) -> str:
+        self.last_call_failed = True
         if not self._client:
             return (
                 f"### ATS Gap & Tailoring para {job_title}\n\n"
@@ -100,7 +103,9 @@ class GeminiClient:
                 model=self.model,
                 contents=prompt,
             )
-            return (response.text or "").strip()
+            text = (response.text or "").strip()
+            self.last_call_failed = not text
+            return text
         except Exception as ex:
             logger.warning("Fallo al generar CV tailor con Gemini '%s': %s", self.model, ex)
             return (
@@ -110,6 +115,39 @@ class GeminiClient:
                 f"* **Aviso:** Error de conexión con Gemini ({ex})."
             )
 
+    def tailor_summary(
+        self,
+        job_title: str,
+        job_description: str,
+        cv_base_markdown: str,
+        current_summary: str,
+    ) -> str:
+        """Reescribe el resumen profesional del CV para una vacante. Devuelve "" si no hay IA disponible."""
+        self.last_call_failed = True
+        if not self._client:
+            return ""
+
+        prompt = (
+            f"Reescribe el resumen profesional de esta hoja de vida para la vacante '{job_title}'.\n\n"
+            f"Descripción de la vacante (recortada a 4,000 caracteres):\n{job_description[:4000]}\n\n"
+            f"Hoja de vida completa:\n{cv_base_markdown}\n\n"
+            f"Resumen actual:\n{current_summary}\n\n"
+            "Reglas estrictas:\n"
+            "- Usa solo hechos que aparezcan en la hoja de vida: no agregues tecnologías, años, cifras, empresas ni títulos.\n"
+            "- Destaca primero lo que más se relaciona con la vacante.\n"
+            "- Escribe en el mismo idioma del resumen actual, en 3 o 4 frases y máximo 600 caracteres.\n"
+            "- Devuelve solo el texto del resumen, sin Markdown, comillas ni encabezados."
+        )
+
+        try:
+            response = self._client.models.generate_content(model=self.model, contents=prompt)
+            text = (response.text or "").strip()
+            self.last_call_failed = not text
+            return text
+        except Exception as ex:
+            logger.warning("Fallo al generar resumen de CV con Gemini '%s': %s", self.model, ex)
+            return ""
+
     def prepare_interview(
         self,
         job_title: str,
@@ -117,6 +155,7 @@ class GeminiClient:
         job_description: str,
         candidate_stack: list[str],
     ) -> str:
+        self.last_call_failed = True
         if not self._client:
             stack_str = ", ".join(candidate_stack)
             return (
@@ -153,7 +192,9 @@ class GeminiClient:
                 model=self.model,
                 contents=prompt,
             )
-            return (response.text or "").strip()
+            text = (response.text or "").strip()
+            self.last_call_failed = not text
+            return text
         except Exception as ex:
             logger.warning("Fallo al generar entrevista con Gemini '%s': %s", self.model, ex)
             stack_str = ", ".join(candidate_stack)

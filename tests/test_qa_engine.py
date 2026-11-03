@@ -215,3 +215,20 @@ def test_load_candidate_profile_from_example_yaml() -> None:
     assert profile.salary.usd_monthly == 1500
     assert profile.get_experience_years("React") == 2
     assert profile.get_experience_years("TecnologiaInexistente") == 1
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "Rate your English level from 1 to 10",
+        "Nombre completo de tu referencia laboral",
+        "Email address of your previous manager",
+        "Describe tu experiencia en proyectos de equipo",
+        "¿Por qué quieres trabajar con nosotros?",
+    ],
+)
+def test_questions_without_safe_automatic_answer(engine: QuestionAnswerEngine, question: str) -> None:
+    match = engine.find_answer(question)
+
+    assert match.is_confident_match is False
+    assert match.answer == ""

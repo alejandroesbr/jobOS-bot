@@ -7,7 +7,7 @@ import re
 from src.adapters.ai.gemini_client import GeminiClient
 from src.adapters.db.repository import ApplicationRepository
 from src.adapters.notion.notion_client import NotionClient
-from src.config_loader import load_candidate_profile
+from src.config_loader import TechVocabulary, load_candidate_profile, load_filter_config
 from src.domain.models import ApplicationRecord, ApplicationStatus
 
 logger = logging.getLogger(__name__)
@@ -58,13 +58,17 @@ class CareerService:
             cv_base_markdown=cv_text,
         )
 
-        self.repository.save_cv_tailor_cache(application_id, analysis)
+        if self.gemini_client.last_call_failed is not True:
+            self.repository.save_cv_tailor_cache(application_id, analysis)
         return analysis
 
     def prepare_interview(self, application_id: int) -> Path:
         record = self.repository.find_by_id(application_id)
         if not record:
             raise ValueError(f"Application ID {application_id} not found in database.")
+
+        if record.interview_prep_path and Path(record.interview_prep_path).is_file():
+            return Path(record.interview_prep_path)
 
         clean_company = re.sub(r"[^a-zA-Z0-9_-]", "_", record.company).strip("_")
         self.interviews_dir.mkdir(parents=True, exist_ok=True)
@@ -81,7 +85,9 @@ class CareerService:
         )
 
         out_file.write_text(prep_content, encoding="utf-8")
-        self.repository.save_interview_prep_path(application_id, str(out_file))
+        # Solo se registra (y por tanto se reutiliza) la guía generada realmente por Gemini.
+        if self.gemini_client.last_call_failed is not True:
+            self.repository.save_interview_prep_path(application_id, str(out_file))
         return out_file
 
     def check_followups(self, days_threshold: int = 7) -> list[ApplicationRecord]:
@@ -125,6 +131,12 @@ class CareerService:
 
         return stalled
 
+    def _load_vocabulary(self) -> TechVocabulary | None:
+        try:
+            return load_filter_config().tech_vocabulary
+        except (FileNotFoundError, ValueError):
+            return None
+
     def sync_with_notion(self) -> SyncReport:
         pushed_new = 0
         updated_existing = 0
@@ -135,49 +147,68 @@ class CareerService:
         # Step 0: Multi-PC Bootstrap if local DB is empty
         all_local = self.repository.find_all(limit=10)
         if not all_local and self.notion_client.is_configured:
-            bootstrapped = self.notion_client.bootstrap_to_repository(self.repository)
+            bootstrapped = self.notion_client.bootstrap_to_repository(self.repository, self._load_vocabulary())
 
-        # Step 1: PUSH un-synced to Notion
+        # Step 1: Check stalled follow-ups (cambia estados locales antes de sincronizar)
+        stalled = self.check_followups(days_threshold=7)
+
+        # Step 2: PUSH un-synced to Notion
         unpushed = [app for app in self.repository.find_all(limit=500) if not app.notion_page_id]
         for app in unpushed:
             page_id = self.notion_client.push_application(app)
             if page_id:
                 self.repository.update_notion_page_id(app.id, page_id)
+                self.repository.update_notion_synced_status(app.id, app.status)
                 pushed_new += 1
 
-        # Step 2: PUSH updates for re-applied offers
-        reapplied = [app for app in self.repository.find_all(limit=500) if app.times_applied > 1 and app.notion_page_id]
-        for app in reapplied:
-            if app.notion_page_id:
-                if self.notion_client.update_application(app.notion_page_id, app):
-                    updated_existing += 1
-
-        # Step 3: PULL manual status changes from Notion
+        # Step 3: Reconcile statuses. Se compara contra el último estado sincronizado para saber
+        # qué lado cambió: si cambió Notion (edición manual) gana Notion; si cambió SQLite, se sube.
+        pushed_ids: set[int] = set()
         if self.notion_client.is_configured:
             updates = self.notion_client.pull_status_updates()
             page_map = {app.notion_page_id: app for app in self.repository.find_all(limit=500) if app.notion_page_id}
 
             for page_id, status_val in updates:
-                if page_id in page_map:
-                    local_app = page_map[page_id]
-                    if local_app.status.value != status_val:
-                        try:
-                            new_status = ApplicationStatus(status_val)
-                            self.repository.update_status(local_app.id, new_status)
-                            pulled_statuses += 1
+                local_app = page_map.get(page_id)
+                if local_app is None:
+                    continue
+                try:
+                    notion_status = ApplicationStatus(status_val)
+                except ValueError:
+                    continue
 
-                            # Auto-trigger interview prep if changed to Interview
-                            if (
-                                new_status == ApplicationStatus.INTERVIEW_SCHEDULED
-                                and not local_app.interview_prep_path
-                            ):
-                                self.prepare_interview(local_app.id)
-                                preps_triggered += 1
-                        except ValueError:
-                            pass
+                synced = local_app.notion_synced_status
+                if notion_status == local_app.status:
+                    if synced != notion_status:
+                        self.repository.update_notion_synced_status(local_app.id, notion_status)
+                    continue
 
-        # Step 4: Check stalled follow-ups
-        stalled = self.check_followups(days_threshold=7)
+                if synced is None or notion_status != synced:
+                    self.repository.update_status(local_app.id, notion_status)
+                    self.repository.update_notion_synced_status(local_app.id, notion_status)
+                    pulled_statuses += 1
+
+                    # Auto-trigger interview prep if changed to Interview
+                    if (
+                        notion_status == ApplicationStatus.INTERVIEW_SCHEDULED
+                        and not local_app.interview_prep_path
+                    ):
+                        self.prepare_interview(local_app.id)
+                        preps_triggered += 1
+                elif self.notion_client.update_application(page_id, local_app):
+                    self.repository.update_notion_synced_status(local_app.id, local_app.status)
+                    pushed_ids.add(local_app.id)
+                    updated_existing += 1
+
+        # Step 4: PUSH updates for re-applied offers (contador y fecha de envío)
+        reapplied = [
+            app
+            for app in self.repository.find_all(limit=500)
+            if app.times_applied > 1 and app.notion_page_id and app.id not in pushed_ids
+        ]
+        for app in reapplied:
+            if app.notion_page_id and self.notion_client.update_application(app.notion_page_id, app):
+                updated_existing += 1
 
         return SyncReport(
             pushed_new=pushed_new,

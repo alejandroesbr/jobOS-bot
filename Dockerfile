@@ -7,7 +7,8 @@ ENV PYTHONUNBUFFERED=1 \
     HEADLESS=true
 
 COPY requirements.txt pyproject.toml ./
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt \
+    && python -m playwright install --with-deps chromium
 
 COPY src/ ./src/
 COPY cli.py ./

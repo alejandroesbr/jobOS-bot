@@ -339,3 +339,33 @@ def test_record_discovered_offer_reapplication_sets_status_pending(
     assert reapp_record.portal == PortalName.GETONBRD
 
 
+
+
+def test_find_similar_dedup_key_matches_near_identical_title_only() -> None:
+    from src.domain.text_normalizer import build_dedup_key
+
+    repository = ApplicationRepository(":memory:")
+    offer = JobOffer(
+        portal=PortalName.LINKEDIN,
+        title="Desarrollador Full Stack Junior",
+        company="Acme",
+        location="Remoto",
+        modality=WorkModality.REMOTE,
+        url="https://linkedin.com/jobs/view/1",
+    )
+    key = build_dedup_key(offer.company, offer.title)
+    evaluation = MatchEvaluation(
+        dedup_key=key,
+        canonical_url=offer.url,
+        match_score=80,
+        should_apply=True,
+        is_hard_rejected=False,
+        rejection_reason=None,
+        keywords=(),
+    )
+    repository.record_discovered_offer(offer, evaluation)
+
+    assert repository.find_similar_dedup_key(build_dedup_key("Acme", "Junior Desarrollador Full Stack")) == key
+    assert repository.find_similar_dedup_key(build_dedup_key("Acme", "Desarrollador Backend Senior")) is None
+    assert repository.find_similar_dedup_key(build_dedup_key("Otra", "Desarrollador Full Stack Junior")) is None
+    repository.close()

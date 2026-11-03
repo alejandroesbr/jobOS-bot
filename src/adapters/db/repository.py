@@ -3,6 +3,8 @@ from pathlib import Path
 import sqlite3
 from typing import Any
 
+from rapidfuzz import fuzz
+
 from src.domain.models import (
     AnswerSource,
     ApplicationRecord,
@@ -48,7 +50,13 @@ class ApplicationRepository:
         if schema_path.is_file():
             sql = schema_path.read_text(encoding="utf-8")
             self._conn.executescript(sql)
-        for col_def in ("target_url TEXT", "portal TEXT"):
+        for col_def in (
+            "target_url TEXT",
+            "portal TEXT",
+            "notion_synced_status TEXT",
+            "cv_summary_cache TEXT",
+            "cv_pdf_path TEXT",
+        ):
             try:
                 self._conn.execute(f"ALTER TABLE applications ADD COLUMN {col_def};")
             except sqlite3.OperationalError:
@@ -88,6 +96,29 @@ class ApplicationRepository:
         if not row:
             return None
         return self._hydrate_application(row)
+
+    def find_similar_dedup_key(self, dedup_key: str, threshold: float = 85.0) -> str | None:
+        """Busca una vacante ya registrada de la misma empresa con un cargo casi igual (RapidFuzz >= umbral)."""
+        parts = dedup_key.split("::")
+        if len(parts) != 2:
+            return None
+        company_norm, title_norm = parts
+        escaped = company_norm.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        cursor = self._conn.execute(
+            "SELECT dedup_key FROM applications WHERE dedup_key LIKE ? ESCAPE '\\'",
+            (f"{escaped}::%",),
+        )
+        best_key: str | None = None
+        best_score = 0.0
+        for row in cursor.fetchall():
+            candidate = str(row["dedup_key"])
+            candidate_parts = candidate.split("::")
+            if len(candidate_parts) != 2 or candidate_parts[0] != company_norm:
+                continue
+            score = float(fuzz.token_sort_ratio(title_norm, candidate_parts[1]))
+            if score >= threshold and score > best_score:
+                best_key, best_score = candidate, score
+        return best_key
 
     def find_by_id(self, application_id: int) -> ApplicationRecord | None:
         cursor = self._conn.execute(
@@ -457,6 +488,39 @@ class ApplicationRepository:
             )
             return cursor.rowcount > 0
 
+    def update_notion_synced_status(self, application_id: int, status: ApplicationStatus) -> bool:
+        """Guarda el último estado acordado con Notion para saber qué lado cambió en el siguiente sync."""
+        with self._conn:
+            cursor = self._conn.execute(
+                "UPDATE applications SET notion_synced_status = ? WHERE id = ?",
+                (status.value, application_id),
+            )
+            return cursor.rowcount > 0
+
+    def update_times_applied(self, application_id: int, times_applied: int) -> bool:
+        with self._conn:
+            cursor = self._conn.execute(
+                "UPDATE applications SET times_applied = ?, updated_at = ? WHERE id = ?",
+                (times_applied, _get_utc_now_iso(), application_id),
+            )
+            return cursor.rowcount > 0
+
+    def save_cv_summary_cache(self, application_id: int, summary: str) -> bool:
+        with self._conn:
+            cursor = self._conn.execute(
+                "UPDATE applications SET cv_summary_cache = ?, updated_at = ? WHERE id = ?",
+                (summary, _get_utc_now_iso(), application_id),
+            )
+            return cursor.rowcount > 0
+
+    def save_cv_pdf_path(self, application_id: int, file_path: str) -> bool:
+        with self._conn:
+            cursor = self._conn.execute(
+                "UPDATE applications SET cv_pdf_path = ?, updated_at = ? WHERE id = ?",
+                (file_path, _get_utc_now_iso(), application_id),
+            )
+            return cursor.rowcount > 0
+
     def save_cv_tailor_cache(self, application_id: int, cache_text: str) -> bool:
         with self._conn:
             cursor = self._conn.execute(
@@ -565,6 +629,21 @@ class ApplicationRepository:
 
         target_url: str | None = None
         portal: PortalName | None = None
+        notion_synced_status: ApplicationStatus | None = None
+        try:
+            if row["notion_synced_status"]:
+                notion_synced_status = ApplicationStatus(row["notion_synced_status"])
+        except (IndexError, KeyError, ValueError):
+            pass
+
+        cv_summary_cache: str | None = None
+        cv_pdf_path: str | None = None
+        try:
+            cv_summary_cache = str(row["cv_summary_cache"]) if row["cv_summary_cache"] else None
+            cv_pdf_path = str(row["cv_pdf_path"]) if row["cv_pdf_path"] else None
+        except (IndexError, KeyError):
+            pass
+
         try:
             if row["target_url"]:
                 target_url = str(row["target_url"])
@@ -602,4 +681,7 @@ class ApplicationRepository:
             portal=portal,
             submissions=submissions,
             keywords=keywords,
+            notion_synced_status=notion_synced_status,
+            cv_summary_cache=cv_summary_cache,
+            cv_pdf_path=cv_pdf_path,
         )

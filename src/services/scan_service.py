@@ -1,4 +1,4 @@
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 import logging
 
 from src.adapters.db.repository import ApplicationRepository
@@ -78,7 +78,11 @@ class ScanService:
                 errors_by_portal[portal_name.value] = portal_result.error_message
 
             for offer in portal_result.offers:
-                evaluation = self.matcher.evaluate(offer)
+                try:
+                    evaluation = self.matcher.evaluate(offer)
+                except Exception as ex:
+                    logger.warning("Oferta omitida por error al evaluarla (%s): %s", offer.url, ex)
+                    continue
 
                 if evaluation.is_hard_rejected:
                     hard_rejected += 1
@@ -107,12 +111,22 @@ class ScanService:
                     )
                     continue
 
+                # Deduplicación inter-portal: un cargo casi igual de la misma empresa reutiliza la fila existente.
+                if self.repository.find_by_dedup_key(evaluation.dedup_key) is None:
+                    similar_key = self.repository.find_similar_dedup_key(evaluation.dedup_key)
+                    if similar_key is not None:
+                        evaluation = replace(evaluation, dedup_key=similar_key)
+
+                try:
+                    record, is_new, is_reapplication = self.repository.record_discovered_offer(
+                        offer=offer,
+                        evaluation=evaluation,
+                        cooldown_days=self.config.matching.reapply_cooldown_days,
+                    )
+                except Exception as ex:
+                    logger.warning("Oferta omitida por error al registrarla (%s): %s", offer.url, ex)
+                    continue
                 total_matched += 1
-                record, is_new, is_reapplication = self.repository.record_discovered_offer(
-                    offer=offer,
-                    evaluation=evaluation,
-                    cooldown_days=self.config.matching.reapply_cooldown_days,
-                )
 
                 if is_new:
                     new_applications += 1

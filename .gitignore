@@ -13,6 +13,7 @@ data/
 config/profile.yaml
 config/cv_base.md
 config/*.pdf
+cvs/
 *.pdf
 
 # Generated outputs

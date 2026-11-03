@@ -264,7 +264,7 @@ docker compose run --rm jobos pytest -v
 ## 6. Guía de Uso Rápido (CLI & MCP)
 
 > [!TIP]
-> Consulta la [**Guía Completa de Comandos y Flujo End-to-End (`docs/GUIA_COMANDOS_Y_FLUJOS.md`)**](./docs/GUIA_COMANDOS_Y_FLUJOS.md) para ver diagramas del ciclo de vida de una vacante, ejemplos avanzados, automatización con `--auto-submit` y resolución de problemas.
+> Consulta la [**Guía Completa de Comandos y Flujo End-to-End (`docs/GUIA_COMANDOS_Y_FLUJOS.md`)**](./docs/GUIA_COMANDOS_Y_FLUJOS.md) para ver diagramas del ciclo de vida de una vacante, ejemplos avanzados, escaneo diario desatendido y resolución de problemas.
 
 ### Comandos de Terminal (`cli.py`)
 

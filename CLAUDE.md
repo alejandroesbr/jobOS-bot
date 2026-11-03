@@ -10,6 +10,8 @@ python cli.py scan --portal linkedin,getonbrd # Escanea portales específicos (s
 python cli.py assist <id1> [id2 ...]          # Encola y asiste vacantes por ID o URL (memoria local + Gemini)
 python cli.py stats                           # Ranking en consola (Rich) de tecnologías más pedidas
 python cli.py tailor <job_id>                 # Sugiere ajustes al CV según la descripción del cargo
+python cli.py cv <id1> [id2 ...]              # Genera cvs/<id>_<empresa>_<cargo>.pdf con el CV adaptado (no postula)
+python cli.py cv --all --min-score 60         # CV adaptado para todas las vacantes pendientes compatibles
 python cli.py prep <job_id>                   # Genera guía de entrevista en interviews/<empresa>.md
 python cli.py sync                            # Sincroniza estados con Notion y marca follow-ups (+7 días)
 python cli.py export                          # Exporta tabla applications a CSV
@@ -43,12 +45,13 @@ docker compose run --rm jobos scan --portal all # Ejecución contenedorizada (Do
 - **Detección anti-bot y Modo Dual (Local vs. Cloud):** En local usar `headless=False` con `./data/browser_profile`. Cuando corra con el PC apagado (GitHub Actions / Docker), usar `HEADLESS=true` inyectando `storage_state.json` y manteniendo siempre ejecución **single-thread secuencial** con pausas aleatorias (`2.5s` a `6.0s`).
 - **Selectores rotos en un portal:** Si un portal cambia su DOM o pide captcha, el scraper de ese portal debe capturar la excepción, reportar el aviso en `Rich` y permitir que el orquestador continúe con el siguiente portal.
 - **Ruido en keywords:** No usar TF-IDF abierto sobre texto libre; contar coincidencias únicamente contra la lista cerrada `tech_keywords` de `config/filters.yaml`.
+- **CV adaptado sin inventar:** `cv` solo reordena habilidades y proyectos de `config/cv_base.md` según las keywords de la oferta; el resumen reescrito por Gemini se descarta si menciona tecnologías o cifras que no estén en el CV base.
 - **HTML sucio a LLMs:** Extraer solo `inner_text()` del contenedor de la descripción (máx. 4,000 caracteres) antes de enviarlo a Gemini.
 
 ## Rules
-- Por defecto `assist` asiste y se detiene en el paso final para revisión humana. Con la opción `--auto-submit`, se permite el envío automático de extremo a extremo, pero con salvaguarda de seguridad activa: si hay campos obligatorios vacíos o errores de validación, el auto-submit se detiene y se solicita intervención manual.
-- El comando `scan` descubre y registra vacantes compatibles en estado 'Pendiente' con `times_applied=0`. Solo cuando la vacante es realmente enviada (vía `assist` manual o `--auto-submit`), transiciona a 'Enviado' con `times_applied` incrementado.
+- Never enviar un formulario automáticamente (`submit`); `assist` llena el formulario y se detiene para que el usuario revise y haga clic final. `autopilot` solo escanea y sincroniza, nunca postula.
+- El comando `scan` descubre y registra vacantes compatibles en estado 'Pendiente' con `times_applied=0`. Solo cuando el usuario confirma en la terminal que envió la postulación (vía `assist`), transiciona a 'Enviado' con `times_applied` incrementado.
 - Never usar multithreading/multiprocessing para escaneo web ni crear demonios 24/7 en segundo plano, ORMs o UIs web propias.
-- Never subir al repositorio `.env`, `data/`, `config/profile.yaml`, `config/cv_base.md`, `*.pdf`, `interviews/` ni `followups/`.
+- Never subir al repositorio `.env`, `data/`, `config/profile.yaml`, `config/cv_base.md`, `*.pdf`, `cvs/`, `interviews/` ni `followups/`.
 - Always mantener los tests unitarios en `tests/` pasando al modificar `matcher.py`, `db.py` o normalizadores.
 - Always actualizar `PLAN.md` al completar cada paso.

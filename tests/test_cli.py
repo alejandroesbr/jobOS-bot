@@ -139,8 +139,7 @@ def test_cli_autopilot_help() -> None:
     assert result.exit_code == 0
     assert "--portal" in result.output
     assert "--limit" in result.output
-    assert "--min-score" in result.output
     assert "--headless" in result.output
-    assert "--auto-submit" in result.output
+    assert "--auto-submit" not in result.output
 
 

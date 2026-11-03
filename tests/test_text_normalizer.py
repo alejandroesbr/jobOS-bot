@@ -102,3 +102,12 @@ def test_match_evaluation_separates_matched_and_missing_keywords() -> None:
     assert evaluation.matched_keywords == ("Node.js", "PostgreSQL")
     assert evaluation.missing_keywords == ("AWS",)
 
+
+
+def test_dedup_key_keeps_confidential_companies_apart() -> None:
+    key_a = build_dedup_key("Empresa Confidencial", "Desarrollador Junior", "https://computrabajo.com/oferta-a")
+    key_b = build_dedup_key("Empresa Confidencial", "Desarrollador Junior", "https://computrabajo.com/oferta-b")
+    named = build_dedup_key("Acme", "Desarrollador Junior", "https://computrabajo.com/oferta-a")
+
+    assert key_a != key_b
+    assert named == "acme::desarrollador junior"
