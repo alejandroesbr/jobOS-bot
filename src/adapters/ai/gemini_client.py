@@ -14,7 +14,7 @@ class GeminiClient:
         api_key: str | None = None,
         model: str | None = None,
     ) -> None:
-        self.api_key: str = str(api_key or os.getenv("GEMINI_API_KEY") or "")
+        self.api_key: str = api_key if api_key is not None else (os.getenv("GEMINI_API_KEY") or "")
         chosen_model = model or os.getenv("GEMINI_MODEL") or "gemini-3.8-flash"
         self.model: str = str(chosen_model)
         self._client: genai.Client | None = None

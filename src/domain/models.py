@@ -167,6 +167,8 @@ class ApplicationRecord:
     notion_page_id: str | None = None
     cv_tailor_cache: str | None = None
     interview_prep_path: str | None = None
+    target_url: str | None = None
+    portal: PortalName | None = None
     submissions: tuple[SubmissionAttempt, ...] = ()
     keywords: tuple[KeywordMatch, ...] = ()
 

@@ -49,12 +49,20 @@ def collapse_whitespace(text: str) -> str:
 
 
 def normalize_company_name(raw_company: str) -> str:
-    if not raw_company:
+    if not raw_company or not raw_company.strip():
         return ""
     ascii_text = strip_accents(raw_company).lower()
+    raw_alphanumeric = re.sub(r"[^a-z0-9\s]+", " ", ascii_text).strip()
+    if not raw_alphanumeric:
+        return ""
+
     without_suffixes = COMPANY_SUFFIX_PATTERN.sub(" ", ascii_text)
     alphanumeric = re.sub(r"[^a-z0-9\s]+", " ", without_suffixes)
-    return collapse_whitespace(alphanumeric)
+    result = collapse_whitespace(alphanumeric)
+    if not result:
+        # Fallback if legal suffixes were the entire company string (e.g. "S.A.S.")
+        result = collapse_whitespace(raw_alphanumeric)
+    return result
 
 
 def normalize_job_title(raw_title: str) -> str:

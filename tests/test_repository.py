@@ -256,3 +256,86 @@ def test_insert_or_ignore_keywords_does_not_raise_on_duplicate_association(
     # Keywords are still cleanly intact without exceptions
     assert len(reapplied_record.keywords) == 4
 
+
+def test_record_discovered_offer_creates_pending_record_with_count_zero(
+    repo: ApplicationRepository,
+) -> None:
+    offer, evaluation = _make_sample_offer(PortalName.LINKEDIN)
+    record, is_new, is_reapplication = repo.record_discovered_offer(offer, evaluation)
+
+    assert is_new is True
+    assert is_reapplication is False
+    assert record.times_applied == 0
+    assert record.status == ApplicationStatus.PENDING
+    assert record.first_applied_at is None
+    assert record.last_applied_at is None
+    assert record.target_url == evaluation.canonical_url
+    assert record.portal == PortalName.LINKEDIN
+    assert len(record.submissions) == 0
+    assert len(record.keywords) == 4
+
+
+def test_record_discovered_offer_idempotent_when_already_pending(
+    repo: ApplicationRepository,
+) -> None:
+    offer, evaluation = _make_sample_offer(PortalName.LINKEDIN)
+    record1, is_new1, is_reapp1 = repo.record_discovered_offer(offer, evaluation)
+    assert is_new1 is True
+
+    record2, is_new2, is_reapp2 = repo.record_discovered_offer(offer, evaluation)
+    assert is_new2 is False
+    assert is_reapp2 is False
+    assert record2.id == record1.id
+    assert record2.times_applied == 0
+    assert record2.status == ApplicationStatus.PENDING
+
+
+def test_mark_applied_transitions_from_pending_to_applied(
+    repo: ApplicationRepository,
+) -> None:
+    offer, evaluation = _make_sample_offer(PortalName.LINKEDIN)
+    record, _, _ = repo.record_discovered_offer(offer, evaluation)
+
+    applied_record = repo.mark_applied(
+        application_id=record.id,
+        portal=PortalName.LINKEDIN,
+        canonical_url=evaluation.canonical_url,
+        applied_at="2026-10-28T12:00:00Z",
+    )
+
+    assert applied_record.status == ApplicationStatus.APPLIED
+    assert applied_record.times_applied == 1
+    assert applied_record.first_applied_at == "2026-10-28T12:00:00Z"
+    assert applied_record.last_applied_at == "2026-10-28T12:00:00Z"
+    assert len(applied_record.submissions) == 1
+    assert applied_record.submissions[0].attempt_number == 1
+    assert applied_record.submissions[0].portal == PortalName.LINKEDIN
+    assert applied_record.submissions[0].canonical_url == evaluation.canonical_url
+
+
+def test_record_discovered_offer_reapplication_sets_status_pending(
+    repo: ApplicationRepository,
+) -> None:
+    offer1, evaluation1 = _make_sample_offer(PortalName.LINKEDIN, "https://linkedin.com/jobs/1")
+    record1, _, _ = repo.record_discovered_offer(offer1, evaluation1)
+    applied_record = repo.mark_applied(
+        application_id=record1.id,
+        portal=PortalName.LINKEDIN,
+        canonical_url=evaluation1.canonical_url,
+        applied_at="2026-10-20T10:00:00Z",
+    )
+    assert applied_record.status == ApplicationStatus.APPLIED
+    assert applied_record.times_applied == 1
+
+    # New offer on GetOnBrd (eligible to reapply)
+    offer2, evaluation2 = _make_sample_offer(PortalName.GETONBRD, "https://getonbrd.com/jobs/2")
+    reapp_record, is_new, is_reapp = repo.record_discovered_offer(offer2, evaluation2)
+
+    assert is_new is False
+    assert is_reapp is True
+    assert reapp_record.status == ApplicationStatus.PENDING
+    assert reapp_record.times_applied == 1  # Not incremented until mark_applied!
+    assert reapp_record.target_url == evaluation2.canonical_url
+    assert reapp_record.portal == PortalName.GETONBRD
+
+

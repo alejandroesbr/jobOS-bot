@@ -71,11 +71,18 @@ def test_tailor_cv_caches_analysis_in_database(populated_repo: ApplicationReposi
     assert mock_gemini.tailor_cv.call_count == 1
 
 
-def test_prepare_interview_generates_file_and_saves_path(populated_repo: ApplicationRepository) -> None:
+def test_prepare_interview_generates_file_and_saves_path(
+    populated_repo: ApplicationRepository,
+    tmp_path: Path,
+) -> None:
     mock_gemini = MagicMock(spec=GeminiClient)
     mock_gemini.prepare_interview.return_value = "# Mock Technical Interview Guide"
 
-    service = CareerService(repository=populated_repo, gemini_client=mock_gemini)
+    service = CareerService(
+        repository=populated_repo,
+        gemini_client=mock_gemini,
+        interviews_dir=tmp_path / "interviews",
+    )
     prep_path = service.prepare_interview(application_id=1)
 
     assert prep_path.is_file()
@@ -88,8 +95,12 @@ def test_prepare_interview_generates_file_and_saves_path(populated_repo: Applica
     assert rec.interview_prep_path == str(prep_path)
 
 
-def test_check_followups_flags_stalled_applications(populated_repo: ApplicationRepository) -> None:
-    service = CareerService(repository=populated_repo)
+def test_check_followups_flags_stalled_applications(
+    populated_repo: ApplicationRepository,
+    tmp_path: Path,
+) -> None:
+    followups_dir = tmp_path / "followups"
+    service = CareerService(repository=populated_repo, followups_dir=followups_dir)
 
     # Offer applied on 2026-10-20 (more than 7 days ago relative to now)
     stalled = service.check_followups(days_threshold=7)
@@ -102,14 +113,17 @@ def test_check_followups_flags_stalled_applications(populated_repo: ApplicationR
     assert updated.status == ApplicationStatus.FOLLOW_UP_REQUIRED
 
     # Verify followups/pendientes.md was generated
-    followup_file = Path("followups/pendientes.md")
+    followup_file = followups_dir / "pendientes.md"
     assert followup_file.is_file()
     content = followup_file.read_text(encoding="utf-8")
     assert "TechCorp Latam" in content
     assert "Desarrollador Full Stack Junior" in content
 
 
-def test_sync_with_notion_orchestration(populated_repo: ApplicationRepository) -> None:
+def test_sync_with_notion_orchestration(
+    populated_repo: ApplicationRepository,
+    tmp_path: Path,
+) -> None:
     mock_notion = MagicMock(spec=NotionClient)
     mock_notion.is_configured = True
     mock_notion.push_application.return_value = "page-new-123"
@@ -122,6 +136,8 @@ def test_sync_with_notion_orchestration(populated_repo: ApplicationRepository) -
         repository=populated_repo,
         gemini_client=mock_gemini,
         notion_client=mock_notion,
+        interviews_dir=tmp_path / "interviews",
+        followups_dir=tmp_path / "followups",
     )
 
     report = service.sync_with_notion()

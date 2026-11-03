@@ -13,7 +13,7 @@ from src.adapters.scrapers.indeed import IndeedScraper
 from src.adapters.scrapers.linkedin import LinkedInScraper
 from src.adapters.scrapers.orchestrator import ScraperOrchestrator
 from src.config_loader import FilterConfig, load_filter_config
-from src.domain.models import JobOffer, PortalName, WorkModality
+from src.domain.models import ApplicationStatus, JobOffer, PortalName, WorkModality
 from src.services.scan_service import ScanService
 
 
@@ -34,6 +34,24 @@ def test_detect_modality() -> None:
     assert detect_modality("Software Engineer - Teletrabajo Latam") == WorkModality.REMOTE
     assert detect_modality("Ingeniero de Software Híbrido en Barranquilla") == WorkModality.HYBRID
     assert detect_modality("Desarrollador Web Presencial en Sede") == WorkModality.ONSITE
+    assert detect_modality("100% presencial, no es remoto") == WorkModality.ONSITE
+    assert detect_modality("Trabajo en oficina, no remoto") == WorkModality.ONSITE
+
+
+def test_scraper_card_pre_filtering_word_boundary_avoids_false_positives(filter_config: FilterConfig) -> None:
+    scraper = GetOnBrdScraper()
+
+    # "Microservicios" contains "ios", but should NOT be rejected by word-boundary check
+    card_microservices = RawJobCard(
+        portal=PortalName.GETONBRD,
+        title="Desarrollador de Microservicios Junior",
+        company="Tech Innovators",
+        location="Remoto",
+        url="https://getonbrd.com/jobs/microservices-1",
+    )
+    allowed, reason = scraper.pre_filter_card(card_microservices, filter_config)
+    assert allowed is True, f"Falsely rejected: {reason}"
+
 
 
 def test_scraper_card_pre_filtering_rejects_blacklist(filter_config: FilterConfig) -> None:
@@ -162,4 +180,5 @@ def test_scan_service_end_to_end_flow_with_mocked_orchestrator(
     all_apps = repo.find_all()
     assert len(all_apps) == 1
     assert all_apps[0].title == "Desarrollador Full Stack Junior"
-    assert all_apps[0].times_applied == 1
+    assert all_apps[0].times_applied == 0
+    assert all_apps[0].status == ApplicationStatus.PENDING

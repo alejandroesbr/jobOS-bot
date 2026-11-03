@@ -12,6 +12,8 @@ data/
 # Personal candidate profile & CV (keep .example templates versioned)
 config/profile.yaml
 config/cv_base.md
+config/*.pdf
+*.pdf
 
 # Generated outputs
 interviews/

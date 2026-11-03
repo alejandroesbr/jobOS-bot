@@ -48,6 +48,11 @@ class ApplicationRepository:
         if schema_path.is_file():
             sql = schema_path.read_text(encoding="utf-8")
             self._conn.executescript(sql)
+        for col_def in ("target_url TEXT", "portal TEXT"):
+            try:
+                self._conn.execute(f"ALTER TABLE applications ADD COLUMN {col_def};")
+            except sqlite3.OperationalError:
+                pass
 
     def close(self) -> None:
         self._conn.close()
@@ -110,6 +115,177 @@ class ApplicationRepository:
             )
         return [self._hydrate_application(row) for row in cursor.fetchall()]
 
+    def record_discovered_offer(
+        self,
+        offer: JobOffer,
+        evaluation: MatchEvaluation,
+        cooldown_days: int = 3,
+    ) -> tuple[ApplicationRecord, bool, bool]:
+        """Registra una vacante descubierta en estado Pendiente (sin aplicar).
+
+        Retorna (record, is_new, is_reapplication).
+        """
+        timestamp = _get_utc_now_iso()
+        existing = self.find_by_dedup_key(evaluation.dedup_key)
+
+        if existing is None:
+            with self._conn:
+                cursor = self._conn.execute(
+                    """
+                    INSERT INTO applications (
+                        dedup_key, title, company, location, modality,
+                        description, match_score, times_applied, status,
+                        target_url, portal,
+                        first_applied_at, last_applied_at, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, NULL, NULL, ?, ?)
+                    """,
+                    (
+                        evaluation.dedup_key,
+                        offer.title,
+                        offer.company,
+                        offer.location,
+                        offer.modality.value,
+                        offer.description,
+                        evaluation.match_score,
+                        ApplicationStatus.PENDING.value,
+                        evaluation.canonical_url,
+                        offer.portal.value,
+                        timestamp,
+                        timestamp,
+                    ),
+                )
+                if cursor.lastrowid is None:
+                    raise RuntimeError("Failed to obtain lastrowid after inserting application.")
+                app_id = int(cursor.lastrowid)
+
+                if evaluation.keywords:
+                    self._conn.executemany(
+                        """
+                        INSERT OR IGNORE INTO application_keywords (application_id, keyword, is_matched, weight)
+                        VALUES (?, ?, ?, ?)
+                        """,
+                        [
+                            (app_id, kw.keyword, 1 if kw.is_matched else 0, int(kw.weight))
+                            for kw in evaluation.keywords
+                        ],
+                    )
+
+            created_rec = self.find_by_id(app_id)
+            if not created_rec:
+                raise RuntimeError("Failed to retrieve created application record.")
+            return created_rec, True, False
+
+        if existing.status == ApplicationStatus.PENDING:
+            return existing, False, False
+
+        eligible, _ = self.should_reapply(
+            existing_record=existing,
+            new_portal=offer.portal,
+            current_time_iso=timestamp,
+            cooldown_days=cooldown_days,
+        )
+
+        if not eligible:
+            return existing, False, False
+
+        with self._conn:
+            self._conn.execute(
+                """
+                UPDATE applications
+                SET status = ?,
+                    target_url = ?,
+                    portal = ?,
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    ApplicationStatus.PENDING.value,
+                    evaluation.canonical_url,
+                    offer.portal.value,
+                    timestamp,
+                    existing.id,
+                ),
+            )
+            if evaluation.keywords:
+                self._conn.executemany(
+                    """
+                    INSERT OR IGNORE INTO application_keywords (application_id, keyword, is_matched, weight)
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    [
+                        (existing.id, kw.keyword, 1 if kw.is_matched else 0, int(kw.weight))
+                        for kw in evaluation.keywords
+                    ],
+                )
+
+        updated_rec = self.find_by_id(existing.id)
+        if not updated_rec:
+            raise RuntimeError("Failed to retrieve updated application record.")
+        return updated_rec, False, True
+
+    def mark_applied(
+        self,
+        application_id: int,
+        portal: PortalName,
+        canonical_url: str,
+        applied_at: str | None = None,
+        external_id: str | None = None,
+    ) -> ApplicationRecord:
+        """Marca una vacante como enviada (Enviado), incrementa times_applied y registra submission."""
+        timestamp = applied_at or _get_utc_now_iso()
+        existing = self.find_by_id(application_id)
+        if not existing:
+            raise ValueError(f"Application ID {application_id} not found.")
+
+        new_times_applied = existing.times_applied + 1
+        first_applied = existing.first_applied_at or timestamp
+
+        with self._conn:
+            self._conn.execute(
+                """
+                UPDATE applications
+                SET status = ?,
+                    times_applied = ?,
+                    first_applied_at = ?,
+                    last_applied_at = ?,
+                    target_url = ?,
+                    portal = ?,
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    ApplicationStatus.APPLIED.value,
+                    new_times_applied,
+                    first_applied,
+                    timestamp,
+                    canonical_url,
+                    portal.value,
+                    timestamp,
+                    application_id,
+                ),
+            )
+
+            self._conn.execute(
+                """
+                INSERT INTO application_submissions (
+                    application_id, attempt_number, portal, external_id, canonical_url, applied_at
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    application_id,
+                    new_times_applied,
+                    portal.value,
+                    external_id,
+                    canonical_url,
+                    timestamp,
+                ),
+            )
+
+        updated_record = self.find_by_id(application_id)
+        if not updated_record:
+            raise RuntimeError("Failed to retrieve updated application record.")
+        return updated_record
+
     def record_submission(
         self,
         offer: JobOffer,
@@ -147,8 +323,9 @@ class ApplicationRepository:
                 INSERT INTO applications (
                     dedup_key, title, company, location, modality,
                     description, match_score, times_applied, status,
+                    target_url, portal,
                     first_applied_at, last_applied_at, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     evaluation.dedup_key,
@@ -159,6 +336,8 @@ class ApplicationRepository:
                     offer.description,
                     evaluation.match_score,
                     ApplicationStatus.APPLIED.value,
+                    evaluation.canonical_url,
+                    offer.portal.value,
                     timestamp,
                     timestamp,
                     timestamp,
@@ -209,6 +388,8 @@ class ApplicationRepository:
                 UPDATE applications
                 SET times_applied = ?,
                     last_applied_at = ?,
+                    target_url = ?,
+                    portal = ?,
                     updated_at = ?,
                     status = CASE
                         WHEN status = 'Requiere Seguimiento' THEN 'Enviado'
@@ -216,7 +397,7 @@ class ApplicationRepository:
                     END
                 WHERE id = ?
                 """,
-                (new_times_applied, timestamp, timestamp, existing.id),
+                (new_times_applied, timestamp, evaluation.canonical_url, offer.portal.value, timestamp, existing.id),
             )
 
             self._conn.execute(
@@ -382,6 +563,25 @@ class ApplicationRepository:
             for k in kw_cursor.fetchall()
         )
 
+        target_url: str | None = None
+        portal: PortalName | None = None
+        try:
+            if row["target_url"]:
+                target_url = str(row["target_url"])
+        except (IndexError, KeyError):
+            pass
+
+        try:
+            if row["portal"]:
+                portal = PortalName(row["portal"])
+        except (IndexError, KeyError, ValueError):
+            pass
+
+        if not target_url and submissions:
+            target_url = submissions[-1].canonical_url
+        if not portal and submissions:
+            portal = submissions[-1].portal
+
         return ApplicationRecord(
             id=app_id,
             dedup_key=str(row["dedup_key"]),
@@ -398,6 +598,8 @@ class ApplicationRepository:
             notion_page_id=str(row["notion_page_id"]) if row["notion_page_id"] else None,
             cv_tailor_cache=str(row["cv_tailor_cache"]) if row["cv_tailor_cache"] else None,
             interview_prep_path=str(row["interview_prep_path"]) if row["interview_prep_path"] else None,
+            target_url=target_url,
+            portal=portal,
             submissions=submissions,
             keywords=keywords,
         )

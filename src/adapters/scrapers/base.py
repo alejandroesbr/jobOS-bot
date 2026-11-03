@@ -1,6 +1,7 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 import logging
+import re
 from typing import TYPE_CHECKING
 
 from playwright.sync_api import Page
@@ -36,6 +37,8 @@ class RawJobCard:
 
 def detect_modality(text: str) -> WorkModality:
     cleaned = strip_accents(text).lower()
+    if any(neg in cleaned for neg in ["no es remoto", "no remoto", "no-remoto", "100% presencial", "100 % presencial", "totalmente presencial"]):
+        return WorkModality.ONSITE
     if "remot" in cleaned or "teletrabaj" in cleaned or "home office" in cleaned or "100% remoto" in cleaned:
         return WorkModality.REMOTE
     if "hibrid" in cleaned or "hybrid" in cleaned:
@@ -65,13 +68,13 @@ class BasePortalScraper(ABC):
         card_title = strip_accents(card.title).lower()
         for blacklisted in config.title_blacklist:
             blacklisted_norm = strip_accents(blacklisted).lower()
-            if blacklisted_norm in card_title:
+            if re.search(rf"\b{re.escape(blacklisted_norm)}\b", card_title, re.IGNORECASE):
                 return False, f"Title matched blacklist: '{blacklisted}'"
 
         card_company = strip_accents(card.company).lower()
         for blacklisted_comp in config.company_blacklist:
             comp_norm = strip_accents(blacklisted_comp).lower()
-            if comp_norm in card_company:
+            if comp_norm == card_company or re.search(rf"\b{re.escape(comp_norm)}\b", card_company, re.IGNORECASE):
                 return False, f"Company matched blacklist: '{blacklisted_comp}'"
 
         return True, None

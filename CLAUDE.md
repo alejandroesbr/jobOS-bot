@@ -27,7 +27,7 @@ docker compose run --rm jobos scan --portal all # Ejecución contenedorizada (Do
   - `computrabajo.py` y `elempleo.py` (Mercado local Colombia)
   - `glassdoor.py` e `indeed.py` (Portales globales)
 - `src/matcher.py`: Filtro Regex declarativo (`config/filters.yaml`), deduplicación y similitud Levenshtein (`rapidfuzz`, umbral `>= 85%`).
-- `src/ai.py` y `src/notion.py`: Clientes ligeros para `gemini-2.5-flash` y Notion API.
+- `src/ai.py` y `src/notion.py`: Clientes ligeros para `gemini-3.8-flash` (con cascada de fallback) y Notion API.
 - `tests/`: Pruebas unitarias deterministas con `pytest` (sin red ni navegador) para demostrar calidad de código en el portafolio.
 
 ## Conventions
@@ -46,8 +46,9 @@ docker compose run --rm jobos scan --portal all # Ejecución contenedorizada (Do
 - **HTML sucio a LLMs:** Extraer solo `inner_text()` del contenedor de la descripción (máx. 4,000 caracteres) antes de enviarlo a Gemini.
 
 ## Rules
-- Never enviar un formulario automáticamente (`submit`); siempre detenerse para que el usuario revise y haga clic final.
+- Por defecto `assist` asiste y se detiene en el paso final para revisión humana. Con la opción `--auto-submit`, se permite el envío automático de extremo a extremo, pero con salvaguarda de seguridad activa: si hay campos obligatorios vacíos o errores de validación, el auto-submit se detiene y se solicita intervención manual.
+- El comando `scan` descubre y registra vacantes compatibles en estado 'Pendiente' con `times_applied=0`. Solo cuando la vacante es realmente enviada (vía `assist` manual o `--auto-submit`), transiciona a 'Enviado' con `times_applied` incrementado.
 - Never usar multithreading/multiprocessing para escaneo web ni crear demonios 24/7 en segundo plano, ORMs o UIs web propias.
-- Never subir al repositorio `.env`, `data/`, `config/profile.yaml`, `config/cv_base.md`, `interviews/` ni `followups/`.
+- Never subir al repositorio `.env`, `data/`, `config/profile.yaml`, `config/cv_base.md`, `*.pdf`, `interviews/` ni `followups/`.
 - Always mantener los tests unitarios en `tests/` pasando al modificar `matcher.py`, `db.py` o normalizadores.
 - Always actualizar `PLAN.md` al completar cada paso.

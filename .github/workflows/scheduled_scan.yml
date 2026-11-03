@@ -35,7 +35,7 @@ jobs:
             jobos-db-
 
       - name: Setup session cookies if available
-        if: env.PLAYWRIGHT_STORAGE_STATE != ''
+        if: ${{ secrets.PLAYWRIGHT_STORAGE_STATE != '' }}
         env:
           PLAYWRIGHT_STORAGE_STATE: ${{ secrets.PLAYWRIGHT_STORAGE_STATE }}
         run: |

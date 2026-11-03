@@ -263,6 +263,9 @@ docker compose run --rm jobos pytest -v
 
 ## 6. Guía de Uso Rápido (CLI & MCP)
 
+> [!TIP]
+> Consulta la [**Guía Completa de Comandos y Flujo End-to-End (`docs/GUIA_COMANDOS_Y_FLUJOS.md`)**](./docs/GUIA_COMANDOS_Y_FLUJOS.md) para ver diagramas del ciclo de vida de una vacante, ejemplos avanzados, automatización con `--auto-submit` y resolución de problemas.
+
 ### Comandos de Terminal (`cli.py`)
 
 ```powershell
@@ -347,7 +350,10 @@ Agrega este bloque en tu cliente MCP (`mcp_config.json` / `claude_desktop_config
 - [**02. Diccionario de Datos, Índices y Esquema DDL (`schema.sql`)**](./docs/base-de-datos/02-diccionario-datos-y-ddl-sql.md)
 - [**03. Normalización Léxica, URLs Canónicas y Claves (`text_normalizer.py`)**](./docs/base-de-datos/03-normalizacion-lexica-y-claves-deduplicacion.md)
 
-### IV. Planificación y Reglas de Agente
+### IV. Manual de Operaciones y Flujos
+- [**Guía Definitiva de Comandos y Flujo de Trabajo**](./docs/GUIA_COMANDOS_Y_FLUJOS.md): Manual operativo paso a paso de cada comando, parámetros, estados de vacante y FAQ.
+
+### V. Planificación y Reglas de Agente
 
 - [**PLAN.md**](./PLAN.md): Hoja de ruta ejecutable paso a paso dividida en 6 bloques verificables.
 - [**CLAUDE.md**](./CLAUDE.md): Reglas estrictas de arquitectura, convenciones y trampas conocidas.

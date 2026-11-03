@@ -21,6 +21,8 @@ CREATE TABLE IF NOT EXISTS applications (
             'Descartado'
         )
     ),
+    target_url TEXT,
+    portal TEXT,
     notion_page_id TEXT UNIQUE,
     cv_tailor_cache TEXT,
     interview_prep_path TEXT,

@@ -48,8 +48,8 @@ class NotionClient:
         database_id: str | None = None,
         timeout: float = 15.0,
     ) -> None:
-        self.api_token = api_token or os.getenv("NOTION_TOKEN", "")
-        raw_db_id = database_id or os.getenv("NOTION_DATABASE_ID", "")
+        self.api_token = api_token if api_token is not None else os.getenv("NOTION_TOKEN", "")
+        raw_db_id = database_id if database_id is not None else os.getenv("NOTION_DATABASE_ID", "")
         self.database_id = clean_notion_id(raw_db_id)
         self.timeout = timeout
         self._resolved: bool = False

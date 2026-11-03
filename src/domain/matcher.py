@@ -18,12 +18,13 @@ SPECIAL_KEYWORD_PATTERNS: dict[str, re.Pattern[str]] = {
     ".net": re.compile(r"(?:^|[^\w])\.net(?=[^\w]|$)", re.IGNORECASE),
     "node.js": re.compile(r"\bnode(?:\.js)?\b", re.IGNORECASE),
     "react": re.compile(r"\breact(?:\.js)?\b", re.IGNORECASE),
-    "next.js": re.compile(r"\bnext(?:\.js)?\b", re.IGNORECASE),
+    "next.js": re.compile(r"\bnext(?:\.js|js)\b", re.IGNORECASE),
     "nestjs": re.compile(r"\bnest(?:\.js)?\b", re.IGNORECASE),
     "typescript": re.compile(r"\btypescript\b|(?<![\./])\bts\b", re.IGNORECASE),
     "javascript": re.compile(r"\bjavascript\b|(?<![\./])\bjs\b", re.IGNORECASE),
     "postgresql": re.compile(r"\bpostgres(?:ql)?\b", re.IGNORECASE),
     "ci/cd": re.compile(r"\bci[/-]cd\b", re.IGNORECASE),
+    "rest api": re.compile(r"\b(?:rest\s*apis?|apis?\s*rest)\b", re.IGNORECASE),
 }
 
 

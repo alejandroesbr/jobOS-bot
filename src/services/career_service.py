@@ -29,10 +29,14 @@ class CareerService:
         repository: ApplicationRepository,
         gemini_client: GeminiClient | None = None,
         notion_client: NotionClient | None = None,
+        interviews_dir: Path | str | None = None,
+        followups_dir: Path | str | None = None,
     ) -> None:
         self.repository = repository
         self.gemini_client = gemini_client or GeminiClient()
         self.notion_client = notion_client or NotionClient()
+        self.interviews_dir = Path(interviews_dir) if interviews_dir is not None else Path("interviews")
+        self.followups_dir = Path(followups_dir) if followups_dir is not None else Path("followups")
 
     def tailor_cv(self, application_id: int) -> str:
         record = self.repository.find_by_id(application_id)
@@ -63,9 +67,8 @@ class CareerService:
             raise ValueError(f"Application ID {application_id} not found in database.")
 
         clean_company = re.sub(r"[^a-zA-Z0-9_-]", "_", record.company).strip("_")
-        out_dir = Path("interviews")
-        out_dir.mkdir(parents=True, exist_ok=True)
-        out_file = out_dir / f"{application_id}_{clean_company.lower()}.md"
+        self.interviews_dir.mkdir(parents=True, exist_ok=True)
+        out_file = self.interviews_dir / f"{application_id}_{clean_company.lower()}.md"
 
         profile = load_candidate_profile()
         candidate_stack = list(profile.experience_years.keys())
@@ -101,9 +104,8 @@ class CareerService:
                 continue
 
         if stalled:
-            followups_dir = Path("followups")
-            followups_dir.mkdir(parents=True, exist_ok=True)
-            report_file = followups_dir / "pendientes.md"
+            self.followups_dir.mkdir(parents=True, exist_ok=True)
+            report_file = self.followups_dir / "pendientes.md"
 
             lines = ["# Mensajes de Seguimiento Pendientes (Follow-ups)\n"]
             for app in stalled:

@@ -5,6 +5,9 @@ import sys
 from typing import Any
 
 import click
+from dotenv import load_dotenv
+
+load_dotenv()
 from rich.markdown import Markdown
 
 from src.adapters.db.repository import ApplicationRepository
@@ -263,15 +266,19 @@ def sync_cmd(db_path: str) -> None:
 
 @cli.command(name="assist")
 @click.argument("targets", nargs=-1, required=False)
+@click.option("--all", "-a", "all_pending", is_flag=True, default=False, help="Procesar todas las vacantes pendientes en cola automáticamente sin preguntar.")
 @click.option("--min-score", default=None, type=int, help="Filtrar vacantes con puntaje mínimo de afinidad (ej. 70).")
 @click.option("--top", default=None, type=int, help="Procesar las mejores N vacantes pendientes en cola.")
 @click.option("--auto-submit", is_flag=True, default=False, help="Hacer clic de envío final automáticamente.")
+@click.option("--headless", is_flag=True, default=False, help="Ejecutar el navegador en segundo plano sin interfaz gráfica.")
 @click.option("--db-path", default="data/jobs.db", help="Ruta al archivo SQLite local.")
 def assist_cmd(
     targets: tuple[str, ...],
+    all_pending: bool,
     min_score: int | None,
     top: int | None,
     auto_submit: bool,
+    headless: bool,
     db_path: str,
 ) -> None:
     """Abre el navegador en modo copiloto y autocompleta el formulario de postulación.
@@ -306,10 +313,11 @@ def assist_cmd(
             if top is not None:
                 pending_records = pending_records[:top]
 
-            if top is not None or (min_score is not None and not targets):
+            if all_pending or top is not None or (min_score is not None and not targets):
                 tokens = [str(r.id) for r in pending_records]
                 if not tokens:
-                    print_warning(f"No se encontraron vacantes pendientes con Match >= {min_score}%.")
+                    msg = f" con Match >= {min_score}%" if min_score is not None else ""
+                    print_warning(f"No se encontraron vacantes pendientes{msg}.")
                     return
             else:
                 print_pending_applications_table(pending_records[:15])
@@ -362,7 +370,12 @@ def assist_cmd(
             console.print(f"[dim]URL: {target_url}[/dim]\n")
 
             try:
-                service.run_assist(target_url, application_id=target_id, auto_submit=auto_submit)
+                service.run_assist(
+                    target_url,
+                    application_id=target_id,
+                    auto_submit=auto_submit,
+                    headless=headless,
+                )
                 completed_count += 1
             except KeyboardInterrupt:
                 console.print("\n[yellow]Cola de postulación pausada por el usuario (Ctrl+C).[/yellow]")
@@ -380,6 +393,140 @@ def assist_cmd(
         repo.close()
 
 
+@cli.command(name="autopilot")
+@click.option(
+    "--portal",
+    "portal_arg",
+    default="all",
+    help="Portal a escanear: linkedin, getonbrd, computrabajo o all (separados por coma).",
+)
+@click.option(
+    "--limit",
+    "limit_arg",
+    default=15,
+    type=int,
+    help="Límite máximo de ofertas a inspeccionar por portal. Por defecto 15.",
+)
+@click.option(
+    "--min-score",
+    default=50,
+    type=int,
+    help="Puntaje mínimo de afinidad para postular automáticamente. Por defecto 50%.",
+)
+@click.option(
+    "--headless",
+    is_flag=True,
+    default=False,
+    help="Ejecutar navegadores en segundo plano sin interfaz gráfica.",
+)
+@click.option(
+    "--auto-submit/--no-auto-submit",
+    default=True,
+    help="Enviar automáticamente los formularios válidos sin confirmación manual.",
+)
+@click.option(
+    "--db-path",
+    default="data/jobs.db",
+    help="Ruta al archivo SQLite local.",
+)
+def autopilot_cmd(
+    portal_arg: str,
+    limit_arg: int,
+    min_score: int,
+    headless: bool,
+    auto_submit: bool,
+    db_path: str,
+) -> None:
+    """Ejecuta el ciclo autónomo completo: Escaneo -> Postulación Automática -> Sync Notion."""
+    print_banner(
+        "jobOS-bot — Piloto Automático Autónomo",
+        "Pipeline desatendido: 1. Escaneo Multi-Portal -> 2. Auto-Postulación Segura -> 3. Sync Notion",
+    )
+
+    portals: list[PortalName] = []
+    if portal_arg.lower().strip() == "all":
+        portals = list(PortalName)
+    else:
+        for p in portal_arg.split(","):
+            cleaned = p.strip().lower()
+            try:
+                portals.append(PortalName(cleaned))
+            except ValueError:
+                print_warning(f"Portal '{cleaned}' ignorado. Válidos: {[e.value for e in PortalName]}")
+
+    if not portals:
+        print_error("No se especificaron portales válidos.")
+        sys.exit(1)
+
+    repo = ApplicationRepository(db_path)
+    config = load_filter_config()
+    scan_service = ScanService(repository=repo, config=config)
+
+    try:
+        # FASE 1: Escaneo y clasificación
+        console.print("\n[bold cyan]━━━ FASE 1: Escaneo y descubrimiento de vacantes ━━━[/bold cyan]\n")
+        scan_summary = scan_service.run_scan_pipeline(
+            portals=portals,
+            limit_per_portal=limit_arg,
+            headless=headless,
+        )
+        print_scan_summary(scan_summary)
+
+        # FASE 2: Postulación automática en cola
+        console.print(f"\n[bold cyan]━━━ FASE 2: Postulación automática (Afinidad >= {min_score}%) ━━━[/bold cyan]\n")
+        pending_records = repo.find_all(status=ApplicationStatus.PENDING, limit=100)
+        qualifying = [r for r in pending_records if r.match_score >= min_score]
+
+        if not qualifying:
+            console.print(
+                f"[yellow]No hay vacantes pendientes con afinidad >= {min_score}%. Pasando a sincronización.[/yellow]\n"
+            )
+        else:
+            assist_service = AssistService(repository=repo)
+            total = len(qualifying)
+            processed_count = 0
+            for idx, rec in enumerate(qualifying, 1):
+                url = rec.submissions[-1].canonical_url if rec.submissions else None
+                if not url:
+                    continue
+                print_banner(
+                    f"Autopilot — Postulando ({idx}/{total})",
+                    f"Vacante #{rec.id}: {rec.company} — {rec.title} | Match: {rec.match_score}%",
+                )
+                try:
+                    assist_service.run_assist(
+                        url,
+                        application_id=rec.id,
+                        auto_submit=auto_submit,
+                        headless=headless,
+                    )
+                    processed_count += 1
+                except KeyboardInterrupt:
+                    console.print("\n[yellow]Autopilot pausado por el usuario (Ctrl+C).[/yellow]")
+                    break
+                except Exception as ex:
+                    print_error(f"Error procesando vacante #{rec.id}: {ex}")
+
+            console.print(f"\n[bold green]✓ Postulaciones procesadas: {processed_count}/{total}[/bold green]\n")
+
+        # FASE 3: Sincronización y CRM
+        console.print("\n[bold cyan]━━━ FASE 3: Sincronización con Notion CRM y Seguimiento ━━━[/bold cyan]\n")
+        try:
+            career_service = CareerService(repository=repo)
+            report = career_service.sync_with_notion()
+            console.print(f"[green]• Vacantes nuevas enviadas a Notion (Push):[/green] {report.pushed_new}")
+            console.print(f"[blue]• Re-postulaciones actualizadas en Notion:[/blue] {report.updated_existing}")
+            console.print(f"[yellow]• Postulaciones marcadas para seguimiento (+7 días):[/yellow] {report.stalled_followups}")
+        except Exception as ex:
+            console.print(f"[yellow]Sincronización omitida o no configurada: {ex}[/yellow]")
+
+        console.print("\n[bold green]══════════════════════════════════════════════════════════[/bold green]")
+        console.print("[bold green]✓ Ciclo de Piloto Automático completado con éxito.[/bold green]")
+        console.print("[bold green]══════════════════════════════════════════════════════════[/bold green]\n")
+    finally:
+        repo.close()
+
+
 @cli.command(name="auth")
 @click.option(
     "--output",
@@ -391,7 +538,10 @@ def auth_cmd(output_path: str) -> None:
     """Abre el navegador en modo visible para iniciar sesión manual y exportar storage_state.json."""
     from playwright.sync_api import sync_playwright
 
-    print_banner("jobOS-bot — Gestor de Autenticación de Portales", "Inicia sesión en tus portales preferidos y cierra el navegador cuando termines.")
+    print_banner(
+        "jobOS-bot — Gestor de Autenticación de Portales",
+        "Inicia sesión en tus portales preferidos y presiona ENTER en la terminal para guardar cookies.",
+    )
     out_file = Path(output_path)
     out_file.parent.mkdir(parents=True, exist_ok=True)
 
@@ -409,20 +559,33 @@ def auth_cmd(output_path: str) -> None:
         )
         page = context.pages[0] if context.pages else context.new_page()
 
-        console.print("[green]Navegador abierto con perfil persistente (data/browser_profile).[/green]")
-        console.print("[dim]Accede a LinkedIn, GetOnBrd, Computrabajo, etc. e inicia sesión si aún no lo has hecho.[/dim]")
-        console.print("[yellow]Presiona ENTER en esta terminal una vez hayas iniciado sesión para exportar cookies...[/yellow]")
+        console.print("[green]✓ Navegador abierto con perfil persistente en 'data/browser_profile'.[/green]")
+        console.print("[dim]Accede a LinkedIn, GetOnBrd, Computrabajo, etc. e inicia sesión con tus cuentas.[/dim]")
+        console.print("[bold yellow]IMPORTANTE: No cierres la ventana del navegador todavía.[/bold yellow]")
+        console.print("[bold yellow]Una vez hayas iniciado sesión en tus portales, presiona ENTER aquí en la terminal...[/bold yellow]\n")
 
-        page.goto("https://www.linkedin.com/login")
+        try:
+            page.goto("https://www.linkedin.com/login", wait_until="domcontentloaded", timeout=45000)
+        except Exception:
+            pass
+
         try:
             input()
         except EOFError:
             pass
 
-        context.storage_state(path=str(out_file))
-        context.close()
-
-    console.print(f"[bold green]Sesión exportada correctamente a:[/bold green] {out_file}")
+        try:
+            context.storage_state(path=str(out_file))
+            console.print(f"[bold green]✓ Sesión y cookies exportadas correctamente a:[/bold green] [cyan]{out_file}[/cyan]")
+        except Exception as ex:
+            console.print(f"[bold yellow]AVISO:[/bold yellow] La ventana del navegador se cerró antes de exportar '{out_file}'.")
+            console.print("[dim]Tus cookies ya quedaron guardadas automáticamente en disco en 'data/browser_profile'.[/dim]")
+            console.print("[dim]Si necesitas generar el archivo JSON para Docker o GitHub Actions, mantén la ventana abierta hasta presionar ENTER.[/dim]")
+        finally:
+            try:
+                context.close()
+            except Exception:
+                pass
 
 
 if __name__ == "__main__":

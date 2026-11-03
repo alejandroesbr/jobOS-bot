@@ -107,6 +107,8 @@ def test_cli_assist_help() -> None:
     assert result.exit_code == 0
     assert "--min-score" in result.output
     assert "--top" in result.output
+    assert "--all" in result.output
+    assert "--headless" in result.output
 
 
 def test_cli_assist_missing_db() -> None:
@@ -122,4 +124,23 @@ def test_cli_assist_unknown_ids(populated_db_path: str) -> None:
     assert result.exit_code == 0
     assert "Vacante con ID #999 no existe" in result.output
     assert "No hay vacantes válidas para procesar" in result.output
+
+
+def test_cli_assist_all_no_pending(populated_db_path: str) -> None:
+    runner = CliRunner()
+    result = runner.invoke(cli, ["assist", "--all", "--db-path", populated_db_path])
+    assert result.exit_code == 0
+    assert "No hay vacantes en estado 'Pendiente'" in result.output
+
+
+def test_cli_autopilot_help() -> None:
+    runner = CliRunner()
+    result = runner.invoke(cli, ["autopilot", "--help"])
+    assert result.exit_code == 0
+    assert "--portal" in result.output
+    assert "--limit" in result.output
+    assert "--min-score" in result.output
+    assert "--headless" in result.output
+    assert "--auto-submit" in result.output
+
 

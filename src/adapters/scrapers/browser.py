@@ -5,7 +5,7 @@ import logging
 from pathlib import Path
 import random
 import time
-from typing import Any
+from typing import Any, cast
 
 from playwright.sync_api import Browser, BrowserContext, Page, ViewportSize, sync_playwright
 
@@ -57,13 +57,13 @@ def create_browser_session(
                 args=["--disable-blink-features=AutomationControlled"],
             )
             context.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
-            if state_file:
+            if state_file and not context.cookies():
                 try:
                     with open(state_file, "r", encoding="utf-8") as sf:
                         cookie_data = json.load(sf)
                         cookies = cookie_data.get("cookies", [])
                         if cookies:
-                            context.add_cookies(cookies)
+                            context.add_cookies(cast(Any, cookies))
                 except Exception as ex:
                     logger.debug("No se pudieron cargar cookies de storage_state: %s", ex)
             try:

@@ -108,25 +108,32 @@ class ScanService:
                     continue
 
                 total_matched += 1
-                record, applied = self.repository.record_submission(
+                record, is_new, is_reapplication = self.repository.record_discovered_offer(
                     offer=offer,
                     evaluation=evaluation,
                     cooldown_days=self.config.matching.reapply_cooldown_days,
                 )
 
-                if applied:
-                    is_first_time = record.times_applied == 1
-                    if is_first_time:
-                        new_applications += 1
-                    else:
-                        reapplications += 1
-
+                if is_new:
+                    new_applications += 1
                     processed_items.append(
                         EvaluatedOfferItem(
                             offer=offer,
                             evaluation=evaluation,
-                            is_new=is_first_time,
-                            is_reapplication=not is_first_time,
+                            is_new=True,
+                            is_reapplication=False,
+                            is_recorded=True,
+                            record=record,
+                        )
+                    )
+                elif is_reapplication:
+                    reapplications += 1
+                    processed_items.append(
+                        EvaluatedOfferItem(
+                            offer=offer,
+                            evaluation=evaluation,
+                            is_new=False,
+                            is_reapplication=True,
                             is_recorded=True,
                             record=record,
                         )
