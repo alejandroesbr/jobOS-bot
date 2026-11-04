@@ -37,6 +37,7 @@ from src.adapters.obsidian.frontmatter import build_frontmatter, format_yaml_fro
 from src.adapters.obsidian.hubs import (
     create_hub_files,
     ensure_hub_directories,
+    build_dashboard_hub,
     build_companies_index,
     build_skills_index,
     build_portals_index,
@@ -145,6 +146,7 @@ class ObsidianVaultAdapter(KnowledgeVaultPort):
             self._write_application_note(app, note_path)
 
         # Update hub indexes and entity hub pages with latest data
+        build_dashboard_hub(applications, self.vault_path)
         build_companies_index(applications, self.companies_dir)
         build_skills_index(applications, self.skills_dir)
         build_portals_index(applications, self.portals_dir)
@@ -230,6 +232,7 @@ class ObsidianVaultAdapter(KnowledgeVaultPort):
         self._create_all_hubs(applications)
 
         # Build dynamic indexes and entity hubs
+        build_dashboard_hub(applications, self.vault_path)
         build_companies_index(applications, self.companies_dir)
         build_skills_index(applications, self.skills_dir)
         build_portals_index(applications, self.portals_dir)

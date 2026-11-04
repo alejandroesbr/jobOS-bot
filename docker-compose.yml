@@ -4,10 +4,10 @@ services:
     volumes:
       - ./data:/app/data
       - ./config:/app/config:ro
-      - ./vault:/app/vault
+      - ${OBSIDIAN_VAULT_PATH:-/tmp/jobos-obsidian-vault}:/obsidian_vault
       - ./exports:/app/exports
     environment:
       - NOTION_TOKEN=${NOTION_TOKEN}
       - NOTION_DATABASE_ID=${NOTION_DATABASE_ID}
-      - VAULT_PATH=/app/vault
+      - OBSIDIAN_VAULT_PATH=/obsidian_vault
       - HEADLESS=true

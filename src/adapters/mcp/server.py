@@ -10,6 +10,8 @@ All logging goes to stderr to avoid corrupting stdio MCP communication.
 """
 import json
 import logging
+import os
+from pathlib import Path
 import sys
 
 from typing import cast
@@ -75,9 +77,36 @@ def _get_scraper_orchestrator(max_workers: int = 4) -> MultiPortalScraperPort:
     return cast(MultiPortalScraperPort, MultiWorkerScraperOrchestrator(max_workers=max_workers))
 
 
-def _get_vault_adapter(vault_path: str = "vault") -> KnowledgeVaultPort:
+def _resolve_mcp_vault_path(vault_path: str | None = None) -> str:
+    """Resolve external Obsidian vault path from argument or OBSIDIAN_VAULT_PATH / VAULT_PATH."""
+    explicit_vault = (vault_path or "").strip()
+    env_vault = (
+        os.getenv("OBSIDIAN_VAULT_PATH", "").strip()
+        or os.getenv("VAULT_PATH", "").strip()
+    )
+    raw = explicit_vault or env_vault
+    if not raw:
+        raise ValueError(
+            "Ruta del Vault de Obsidian no configurada. "
+            "Pasa 'vault_path' o define OBSIDIAN_VAULT_PATH=/ruta/a/tu/obsidian en .env"
+        )
+    resolved = Path(raw).expanduser().resolve()
+    project_root = Path(__file__).resolve().parents[3]
+    if resolved == project_root or project_root in resolved.parents:
+        raise ValueError(
+            f"El Vault de Obsidian debe apuntar a tu bóveda externa fuera del repositorio (recibido: '{resolved}')."
+        )
+
+    subfolder = os.getenv("OBSIDIAN_VAULT_SUBFOLDER", "jobOS").strip() if not explicit_vault else ""
+    if subfolder and resolved.name.lower() != subfolder.lower():
+        resolved = resolved / subfolder
+
+    return str(resolved)
+
+
+def _get_vault_adapter(vault_path: str | None = None) -> KnowledgeVaultPort:
     """Get the Obsidian vault adapter."""
-    return ObsidianVaultAdapter(vault_path)
+    return ObsidianVaultAdapter(_resolve_mcp_vault_path(vault_path))
 
 
 def _get_matcher(config: FilterConfig) -> OfferMatcher:
@@ -96,7 +125,7 @@ async def run_portal_scan_and_sync(
     workers: int = 4,
     headless: bool = True,
     sync_obsidian: bool = True,
-    vault_path: str = "vault",
+    vault_path: str | None = None,
 ) -> str:
     """
     Scan job portals concurrently, filter offers, persist to SQLite, and sync to Obsidian vault.
@@ -138,7 +167,8 @@ async def run_portal_scan_and_sync(
         # Get adapters
         repo = _get_repository()
         orchestrator = _get_scraper_orchestrator(max_workers=workers)
-        vault = _get_vault_adapter(vault_path) if sync_obsidian else None
+        resolved_vault_path = _resolve_mcp_vault_path(vault_path) if sync_obsidian else ""
+        vault = _get_vault_adapter(resolved_vault_path) if sync_obsidian else None
 
         try:
             logger.info(f"Starting concurrent scan on {len(portal_enums)} portals with {workers} workers")
@@ -148,7 +178,7 @@ async def run_portal_scan_and_sync(
                 headless=headless,
                 max_workers=workers,
                 sync_obsidian=sync_obsidian,
-                vault_path=vault_path,
+                vault_path=resolved_vault_path,
                 config=filter_config,
             )
             handler = ScanPortalsHandler(
@@ -290,7 +320,7 @@ async def query_job_applications(
 
 @mcp.tool()
 async def sync_obsidian_vault(
-    vault_path: str = "vault",
+    vault_path: str | None = None,
     full_rebuild: bool = False,
 ) -> str:
     """
@@ -299,23 +329,24 @@ async def sync_obsidian_vault(
     This is a COMMAND (mutation) - it creates/updates files in the vault.
 
     Args:
-        vault_path: Path to Obsidian vault
+        vault_path: External path to your Obsidian vault (or read from OBSIDIAN_VAULT_PATH)
         full_rebuild: If true, delete existing notes and rebuild completely
 
     Returns:
         JSON string with sync results
     """
     try:
+        resolved_vault_path = _resolve_mcp_vault_path(vault_path)
         repo = _get_repository()
-        vault = _get_vault_adapter(vault_path)
+        vault = _get_vault_adapter(resolved_vault_path)
 
         try:
             all_apps = repo.find_all(limit=5000)
-            logger.info(f"Syncing {len(all_apps)} applications to Obsidian vault at {vault_path}")
+            logger.info(f"Syncing {len(all_apps)} applications to Obsidian vault at {resolved_vault_path}")
 
             command = SyncVaultCommand(
                 applications=all_apps,
-                vault_path=vault_path,
+                vault_path=resolved_vault_path,
                 full_rebuild=full_rebuild,
             )
             handler = SyncVaultHandler(vault=vault)

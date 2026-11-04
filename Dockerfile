@@ -13,7 +13,7 @@ COPY src/ ./src/
 COPY cli.py ./
 COPY config/filters.yaml config/profile.example.yaml config/cv_base.example.md ./config/
 
-RUN mkdir -p data vault exports
+RUN mkdir -p data exports /obsidian_vault
 
 ENTRYPOINT ["python", "cli.py"]
 CMD ["sync"]

@@ -74,13 +74,22 @@ def print_info(message: str) -> None:
     console.print(f"[cyan]ℹ {message}[/cyan]")
 
 
-def _resolve_obsidian_vault_path(vault_path: str | None) -> str:
-    """Resolve external Obsidian vault path from CLI option or .env (OBSIDIAN_VAULT_PATH / VAULT_PATH)."""
-    raw = (
-        (vault_path or "").strip()
-        or os.getenv("OBSIDIAN_VAULT_PATH", "").strip()
+def _resolve_obsidian_vault_path(
+    vault_path: str | None,
+    subfolder: str | None = None,
+) -> str:
+    """Resolve external Obsidian vault path from CLI option or .env (OBSIDIAN_VAULT_PATH / VAULT_PATH).
+
+    When using OBSIDIAN_VAULT_PATH from .env (or when --subfolder is provided),
+    automatically places all jobOS files inside a dedicated subfolder (default: 'jobOS')
+    inside the Obsidian vault so the user's vault root stays clean and organized.
+    """
+    explicit_vault = (vault_path or "").strip()
+    env_vault = (
+        os.getenv("OBSIDIAN_VAULT_PATH", "").strip()
         or os.getenv("VAULT_PATH", "").strip()
     )
+    raw = explicit_vault or env_vault
     if not raw:
         raise ValueError(
             "Ruta del Vault de Obsidian no configurada. "
@@ -93,6 +102,15 @@ def _resolve_obsidian_vault_path(vault_path: str | None) -> str:
             f"El Vault de Obsidian debe estar en una ruta externa fuera de este proyecto (recibido: '{resolved}'). "
             "Indica la ruta donde tienes tu bóveda de Obsidian con '--vault-dir /ruta/a/tu/obsidian' o en .env (OBSIDIAN_VAULT_PATH)."
         )
+
+    effective_subfolder = (
+        subfolder.strip()
+        if subfolder is not None
+        else (os.getenv("OBSIDIAN_VAULT_SUBFOLDER", "jobOS").strip() if not explicit_vault else "")
+    )
+    if effective_subfolder and resolved.name.lower() != effective_subfolder.lower():
+        resolved = resolved / effective_subfolder
+
     return str(resolved)
 
 
@@ -149,8 +167,13 @@ def cli() -> None:
     "--vault-dir",
     "--vault-path",
     "vault_path",
-    default="vault",
-    help="Ruta al vault de Obsidian.",
+    default=None,
+    help="Ruta externa a tu bóveda de Obsidian (o variable OBSIDIAN_VAULT_PATH en .env).",
+)
+@click.option(
+    "--subfolder",
+    default=None,
+    help="Subcarpeta dedicada dentro de la bóveda de Obsidian (por defecto OBSIDIAN_VAULT_SUBFOLDER='jobOS').",
 )
 @click.option(
     "--no-obsidian",
@@ -164,7 +187,8 @@ def scan_cmd(
     headless: bool,
     max_workers: int,
     db_path: str,
-    vault_path: str,
+    vault_path: str | None,
+    subfolder: str | None,
     no_obsidian: bool,
 ) -> None:
     """Escaneo multi-worker concurrente con aislamiento de BrowserContext y sync a Obsidian."""
@@ -206,8 +230,17 @@ def scan_cmd(
 
         # Vault adapter (optional)
         vault: KnowledgeVaultPort | None = None
-        if not no_obsidian:
-            vault = ObsidianVaultAdapter(vault_path)
+        resolved_vault_path = ""
+        sync_obsidian_enabled = not no_obsidian
+        if sync_obsidian_enabled:
+            try:
+                resolved_vault_path = _resolve_obsidian_vault_path(vault_path, subfolder)
+                vault = ObsidianVaultAdapter(resolved_vault_path)
+            except ValueError as ve:
+                if vault_path is not None:
+                    raise
+                print_warning(f"Sincronización con Obsidian omitida en este escaneo: {ve}")
+                sync_obsidian_enabled = False
 
         # Create and execute command via handler
         command = ScanPortalsCommand(
@@ -215,8 +248,8 @@ def scan_cmd(
             limit_per_portal=limit_arg,
             headless=headless,
             max_workers=max_workers,
-            sync_obsidian=not no_obsidian,
-            vault_path=vault_path,
+            sync_obsidian=sync_obsidian_enabled,
+            vault_path=resolved_vault_path,
             config=config,
         )
 
@@ -281,8 +314,13 @@ def _print_scan_summary(result: ScanPortalsResult) -> None:
     "--vault-dir",
     "--vault-path",
     "vault_path",
-    default="vault",
-    help="Ruta al vault de Obsidian.",
+    default=None,
+    help="Ruta externa a tu bóveda de Obsidian (o variable OBSIDIAN_VAULT_PATH en .env).",
+)
+@click.option(
+    "--subfolder",
+    default=None,
+    help="Subcarpeta dedicada dentro de la bóveda de Obsidian (por defecto OBSIDIAN_VAULT_SUBFOLDER='jobOS').",
 )
 @click.option(
     "--target",
@@ -295,16 +333,28 @@ def _print_scan_summary(result: ScanPortalsResult) -> None:
     default=False,
     help="Reconstruir vault completo (borra notas existentes) o sync incremental.",
 )
-def sync_cmd(db_path: str, vault_path: str, target: str, rebuild: bool) -> None:
+def sync_cmd(
+    db_path: str,
+    vault_path: str | None,
+    subfolder: str | None,
+    target: str,
+    rebuild: bool,
+) -> None:
     """Sincroniza base de datos SQLite con vault Obsidian (Graphify-compatible) o Notion."""
     target_norm = target.strip().lower()
     action = "REBUILD completo" if rebuild else "INCREMENTAL"
-    print_banner(
-        f"jobOS-bot v2.0 — Sync {target_norm.capitalize()} ({action})",
-        f"DB: {db_path} | Target: {target_norm} | Vault: {vault_path}"
-    )
 
     try:
+        resolved_vault_path = ""
+        if target_norm == "obsidian":
+            resolved_vault_path = _resolve_obsidian_vault_path(vault_path, subfolder)
+
+        print_banner(
+            f"jobOS-bot v2.0 — Sync {target_norm.capitalize()} ({action})",
+            f"DB: {db_path} | Target: {target_norm}"
+            + (f" | Vault: {resolved_vault_path}" if resolved_vault_path else ""),
+        )
+
         repo = ApplicationRepository(db_path)
         applications = repo.find_all(limit=10000)
 
@@ -368,10 +418,10 @@ def sync_cmd(db_path: str, vault_path: str, target: str, rebuild: bool) -> None:
             )
             console.print(f"[dim]Tiempo: {ext_result.execution_time_ms}ms[/dim]")
         else:
-            vault = ObsidianVaultAdapter(vault_path)
+            vault = ObsidianVaultAdapter(resolved_vault_path)
             command = SyncVaultCommand(
                 applications=applications,
-                vault_path=vault_path,
+                vault_path=resolved_vault_path,
                 full_rebuild=rebuild,
             )
             handler = SyncVaultHandler(vault=vault)

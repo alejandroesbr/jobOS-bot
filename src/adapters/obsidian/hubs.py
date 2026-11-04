@@ -146,37 +146,101 @@ def _get_app_note_name(app: "ApplicationRecord") -> str:
     return sanitize_for_filename(app.dedup_key.replace("::", "_"))
 
 
+def _escape_md_cell(text: str) -> str:
+    """Escape pipe characters and newlines so Markdown tables stay intact."""
+    return text.replace("|", "∣").replace("\n", " ").strip()
+
+
+def _format_applications_table(apps: list["ApplicationRecord"]) -> list[str]:
+    """Generate an Excel-like Markdown table for a list of applications."""
+    if not apps:
+        return ["*Sin vacantes registradas en esta categoría.*"]
+
+    lines = [
+        "| # | Match % | Cargo | Nota | Empresa | Modalidad | Ubicación | Portal | Estado | Skills Clave | Fecha | Acción |",
+        "| :---: | :---: | :--- | :--- | :--- | :---: | :--- | :---: | :---: | :--- | :---: | :---: |",
+    ]
+    for idx, app in enumerate(apps, start=1):
+        note_name = _get_app_note_name(app)
+        safe_title = _escape_md_cell(app.title)
+        safe_comp_file = sanitize_for_filename(app.company)
+        safe_loc = _escape_md_cell(app.location or "Remoto")
+        modality = _escape_md_cell(app.modality.value)
+
+        portal_name = (
+            format_portal_display(app.submissions[0].portal.value)
+            if app.submissions
+            else "unknown"
+        )
+        safe_portal_file = sanitize_for_filename(portal_name)
+        safe_status_file = sanitize_for_filename(app.status.value)
+
+        matched_kws = [
+            f"[[{sanitize_for_filename(kw.keyword)}]]"
+            for kw in app.keywords
+            if kw.is_matched
+        ][:4]
+        skills_cell = ", ".join(matched_kws) if matched_kws else "—"
+
+        date_str = (app.last_applied_at or app.first_applied_at or "")[:10] or "—"
+        url = app.submissions[-1].canonical_url if app.submissions else ""
+        action_cell = f"[🔗 Abrir]({url})" if url else "—"
+
+        badge = "🟢" if app.match_score >= 70 else ("🟡" if app.match_score >= 40 else "⚪")
+
+        lines.append(
+            f"| {idx} "
+            f"| {badge} **{app.match_score}%** "
+            f"| **{safe_title}** "
+            f"| [[{note_name}]] "
+            f"| [[{safe_comp_file}]] "
+            f"| `{modality}` "
+            f"| {safe_loc} "
+            f"| [[{safe_portal_file}]] "
+            f"| [[{safe_status_file}]] "
+            f"| {skills_cell} "
+            f"| {date_str} "
+            f"| {action_cell} |"
+        )
+    return lines
+
+
 def build_companies_index(applications: list["ApplicationRecord"], companies_dir: Path) -> None:
-    """Build company index page with links to all companies.
+    """Build company index page with an Excel-style summary table."""
+    company_apps_map: dict[str, list["ApplicationRecord"]] = defaultdict(list)
+    for app in applications:
+        company_apps_map[app.company].append(app)
 
-    Generates an alphabetically sorted index of all unique companies found
-    in the applications list, with wikilinks to each company's hub page.
+    sorted_companies = sorted(
+        company_apps_map.items(),
+        key=lambda item: (-len(item[1]), item[0].lower()),
+    )
 
-    Args:
-        applications: List of ApplicationRecord objects to extract companies from
-        companies_dir: Directory path for company hub files
-
-    Example:
-        >>> apps = repo.find_all(limit=1000)
-        >>> build_companies_index(apps, Path("vault/companies"))
-    """
-    companies = sorted({app.company for app in applications})
     lines = [
         "---",
         "tags: [hub, companies]",
         "---",
         "",
-        "# Hub de Empresas",
+        "# 🏢 Hub de Empresas Contratantes",
         "",
-        "Este directorio contiene las notas índice para cada empresa contratante.",
-        "Cada empresa enlaza a sus vacantes mediante wikilinks bidireccionales.",
+        f"**Total empresas registradas:** {len(sorted_companies)}",
         "",
-        "## Empresas Registradas",
+        "## 📊 Tabla de Empresas",
         "",
+        "| # | Empresa | Vacantes | Mejor Match % | Match Promedio | Última Vacante |",
+        "| :---: | :--- | :---: | :---: | :---: | :--- |",
     ]
-    for company in companies:
+    for idx, (company, c_apps) in enumerate(sorted_companies, start=1):
         safe_company = sanitize_for_filename(company)
-        lines.append(f"- [[{safe_company}]]")
+        best_score = max((a.match_score for a in c_apps), default=0)
+        avg_score = round(sum(a.match_score for a in c_apps) / len(c_apps)) if c_apps else 0
+        top_app = max(c_apps, key=lambda a: a.match_score)
+        top_note = _get_app_note_name(top_app)
+        lines.append(
+            f"| {idx} | [[{safe_company}]] "
+            f"| **{len(c_apps)}** | **{best_score}%** | {avg_score}% "
+            f"| [[{top_note}]] ({_escape_md_cell(top_app.title)}) |"
+        )
     lines.append("")
 
     index_path = companies_dir / "index.md"
@@ -184,138 +248,122 @@ def build_companies_index(applications: list["ApplicationRecord"], companies_dir
 
 
 def build_skills_index(applications: list["ApplicationRecord"], skills_dir: Path) -> None:
-    """Build skills index page with links to all skills, sorted by demand.
-
-    Aggregates all keywords from applications, counts occurrences across
-    job postings, and generates an index sorted by demand (most requested first).
-
-    Args:
-        applications: List of ApplicationRecord objects to extract skills from
-        skills_dir: Directory path for skill hub files
-
-    Example:
-        >>> apps = repo.find_all(limit=1000)
-        >>> build_skills_index(apps, Path("vault/skills"))
-    """
+    """Build skills index page with an Excel-style demand table."""
     skill_counts: Counter[str] = Counter()
+    skill_matched: dict[str, bool] = {}
+    skill_weights: dict[str, int] = {}
+
     for app in applications:
         for kw in app.keywords:
             skill_counts[kw.keyword] += 1
+            skill_matched[kw.keyword] = skill_matched.get(kw.keyword, False) or kw.is_matched
+            skill_weights[kw.keyword] = max(skill_weights.get(kw.keyword, 0), int(kw.weight))
 
-    sorted_skills = sorted(skill_counts.items(), key=lambda x: -x[1])
+    sorted_skills = sorted(skill_counts.items(), key=lambda x: (-x[1], x[0].lower()))
 
     lines = [
         "---",
         "tags: [hub, skills]",
         "---",
         "",
-        "# Hub de Tecnologías (Skills)",
+        "# 🛠️ Hub de Tecnologías (Skills)",
         "",
-        "Clúster de tecnologías detectadas en el mercado laboral.",
-        "Cada skill enlaza a las vacantes que la requieren.",
+        f"**Total tecnologías detectadas:** {len(sorted_skills)}",
         "",
-        "## Tecnologías por Demanda",
+        "## 📊 Tabla de Tecnologías por Demanda",
         "",
+        "| # | Tecnología | En tu CV | Categoría | Vacantes que la piden | % del Mercado |",
+        "| :---: | :--- | :---: | :---: | :---: | :---: |",
     ]
-    for skill, count in sorted_skills:
+    total_apps = max(len(applications), 1)
+    for idx, (skill, count) in enumerate(sorted_skills, start=1):
         safe_skill = sanitize_for_filename(skill)
-        lines.append(f"- [[{safe_skill}]] — {count} ofertas")
+        in_cv = "✅ Sí" if skill_matched.get(skill, False) else "❌ Falta"
+        tier = {3: "CORE", 2: "SECONDARY", 1: "BONUS"}.get(skill_weights.get(skill, 1), "OTHER")
+        pct = round((count / total_apps) * 100)
+        lines.append(
+            f"| {idx} | [[{safe_skill}]] "
+            f"| {in_cv} | `{tier}` | **{count}** | {pct}% |"
+        )
 
     index_path = skills_dir / "index.md"
     index_path.write_text("\n".join(lines), encoding="utf-8")
 
 
 def build_portals_index(applications: list["ApplicationRecord"], portals_dir: Path) -> None:
-    """Build portals index page.
-
-    Generates an index of all unique portals found in the applications list
-    with wikilinks to each portal's hub page.
-
-    Args:
-        applications: List of ApplicationRecord objects to extract portals from
-        portals_dir: Directory path for portal hub files
-
-    Example:
-        >>> apps = repo.find_all(limit=1000)
-        >>> build_portals_index(apps, Path("vault/portals"))
-    """
-    portals = sorted({format_portal_display(app.submissions[0].portal.value) for app in applications if app.submissions})
-    if not portals:
-        portals = [format_portal_display(p.value) for p in PortalName]
+    """Build portals index page with an Excel-style summary table."""
+    portal_apps: dict[str, list["ApplicationRecord"]] = defaultdict(list)
+    for p in PortalName:
+        portal_apps[format_portal_display(p.value)] = []
+    for app in applications:
+        if app.submissions:
+            p_display = format_portal_display(app.submissions[0].portal.value)
+            portal_apps[p_display].append(app)
 
     lines = [
         "---",
         "tags: [hub, portals]",
         "---",
         "",
-        "# Hub de Portales de Empleo",
+        "# 🌐 Hub de Portales de Empleo",
         "",
-        "Origen de las vacantes rastreadas.",
+        "## 📊 Tabla Comparativa por Portal",
         "",
-        "## Portales Activos",
-        "",
+        "| Portal | Total Vacantes | Alta Afinidad (≥70%) | Match Promedio |",
+        "| :--- | :---: | :---: | :---: |",
     ]
-    for portal in portals:
+    for portal, p_list in sorted(portal_apps.items(), key=lambda x: -len(x[1])):
         safe_portal = sanitize_for_filename(portal)
-        lines.append(f"- [[{safe_portal}]]")
+        high_c = sum(1 for a in p_list if a.match_score >= 70)
+        avg_m = f"{round(sum(a.match_score for a in p_list) / len(p_list))}%" if p_list else "—"
+        lines.append(f"| [[{safe_portal}]] | **{len(p_list)}** | {high_c} | {avg_m} |")
 
     index_path = portals_dir / "index.md"
     index_path.write_text("\n".join(lines), encoding="utf-8")
 
 
 def build_status_index(applications: list["ApplicationRecord"], status_dir: Path) -> None:
-    """Build status index page.
+    """Build status index page with an Excel-style pipeline table."""
+    status_apps: dict[str, list["ApplicationRecord"]] = {
+        status.value: [] for status in ApplicationStatus
+    }
+    for app in applications:
+        status_apps.setdefault(app.status.value, []).append(app)
 
-    Generates an index of all possible application statuses with wikilinks.
-    Unlike other hubs, this includes all defined statuses regardless of
-    whether they appear in the current applications.
-
-    Args:
-        applications: List of ApplicationRecord objects (used for consistency)
-        status_dir: Directory path for status hub files
-
-    Example:
-        >>> apps = repo.find_all(limit=1000)
-        >>> build_status_index(apps, Path("vault/status"))
-    """
     lines = [
         "---",
         "tags: [hub, status]",
         "---",
         "",
-        "# Hub de Estados de Postulación",
+        "# 📊 Hub de Estados de Postulación",
         "",
-        "Estados del pipeline de aplicación.",
+        "## 📋 Resumen por Estado del Pipeline",
         "",
-        "## Estados",
-        "",
+        "| Estado | Cantidad de Vacantes | % del Total |",
+        "| :--- | :---: | :---: |",
     ]
+    total_apps = max(len(applications), 1)
     for status in ApplicationStatus:
-        safe_status = sanitize_for_filename(status.value)
-        lines.append(f"- [[{safe_status}]]")
+        s_name = status.value
+        safe_status = sanitize_for_filename(s_name)
+        count = len(status_apps.get(s_name, []))
+        pct = round((count / total_apps) * 100) if applications else 0
+        lines.append(f"| [[{safe_status}]] | **{count}** | {pct}% |")
 
     index_path = status_dir / "index.md"
     index_path.write_text("\n".join(lines), encoding="utf-8")
 
 
 def create_company_hubs(applications: list["ApplicationRecord"], companies_dir: Path) -> None:
-    """Create individual company hub pages.
-
-    For each unique company in the applications list, creates a hub page
-    listing all applications for that company with key metadata and wikilinks.
-
-    Args:
-        applications: List of ApplicationRecord objects to derive hubs from
-        companies_dir: Directory path for company hub files
-
-    Example:
-        >>> apps = repo.find_all(limit=1000)
-        >>> create_company_hubs(apps, Path("vault/companies"))
-    """
+    """Create individual company hub pages with an Excel-like table of applications."""
     companies = sorted({app.company for app in applications})
 
     for company in companies:
-        company_apps = [app for app in applications if app.company == company]
+        company_apps = sorted(
+            [app for app in applications if app.company == company],
+            key=lambda a: a.match_score,
+            reverse=True,
+        )
         company_tag = slugify(company) or "empresa"
 
         lines = [
@@ -323,22 +371,14 @@ def create_company_hubs(applications: list["ApplicationRecord"], companies_dir: 
             f"tags: [company, {company_tag}]",
             "---",
             "",
-            f"# {company}",
+            f"# 🏢 {company}",
             "",
             f"**Total vacantes:** {len(company_apps)}",
             "",
-            "## Vacantes",
+            "## 📊 Tabla de Vacantes en esta Empresa",
             "",
+            *_format_applications_table(company_apps),
         ]
-
-        for app in company_apps:
-            portal = format_portal_display(app.submissions[0].portal.value) if app.submissions else "unknown"
-            note_name = _get_app_note_name(app)
-            safe_status = sanitize_for_filename(app.status.value)
-            lines.append(
-                f"- [[{note_name}]] — "
-                f"{app.title} ({app.match_score}%) — [[{sanitize_for_filename(portal)}]] — [[{safe_status}]]"
-            )
 
         safe_name = sanitize_for_filename(company)
         file_path = companies_dir / f"{safe_name}.md"
@@ -346,47 +386,28 @@ def create_company_hubs(applications: list["ApplicationRecord"], companies_dir: 
 
 
 def create_skill_hubs(applications: list["ApplicationRecord"], skills_dir: Path) -> None:
-    """Create individual skill hub pages.
-
-    For each unique skill/keyword found in applications, creates a hub page
-    listing all applications requiring that skill with match status indicators.
-
-    Args:
-        applications: List of ApplicationRecord objects to derive hubs from
-        skills_dir: Directory path for skill hub files
-
-    Example:
-        >>> apps = repo.find_all(limit=1000)
-        >>> create_skill_hubs(apps, Path("vault/skills"))
-    """
+    """Create individual skill hub pages with an Excel-like table of applications."""
     skill_to_apps: dict[str, list["ApplicationRecord"]] = defaultdict(list)
     for app in applications:
         for kw in app.keywords:
             skill_to_apps[kw.keyword].append(app)
 
     for skill, apps in skill_to_apps.items():
+        sorted_apps = sorted(apps, key=lambda a: a.match_score, reverse=True)
         skill_tag = slugify(skill) or "tech"
         lines = [
             "---",
             f"tags: [skill, {skill_tag}]",
             "---",
             "",
-            f"# {skill}",
+            f"# 🛠️ {skill}",
             "",
-            f"**Demanda:** {len(apps)} vacantes",
+            f"**Demanda:** {len(sorted_apps)} vacantes",
             "",
-            "## Vacantes que requieren esta habilidad",
+            "## 📊 Vacantes que requieren esta habilidad",
             "",
+            *_format_applications_table(sorted_apps),
         ]
-
-        for app in apps:
-            portal = format_portal_display(app.submissions[0].portal.value) if app.submissions else "unknown"
-            matched = "✅" if any(kw.keyword == skill and kw.is_matched for kw in app.keywords) else "❌"
-            note_name = _get_app_note_name(app)
-            lines.append(
-                f"- {matched} [[{note_name}]] — "
-                f"{app.title} @ [[{sanitize_for_filename(app.company)}]] ({app.match_score}%) — [[{sanitize_for_filename(portal)}]]"
-            )
 
         safe_name = sanitize_for_filename(skill)
         file_path = skills_dir / f"{safe_name}.md"
@@ -394,7 +415,7 @@ def create_skill_hubs(applications: list["ApplicationRecord"], skills_dir: Path)
 
 
 def create_portal_hubs(applications: list["ApplicationRecord"], portals_dir: Path) -> None:
-    """Create individual portal hub pages in vault/portals/<portal>.md."""
+    """Create individual portal hub pages in vault/portals/<portal>.md with a table."""
     portal_to_apps: dict[str, list["ApplicationRecord"]] = defaultdict(list)
     for portal_enum in PortalName:
         portal_to_apps[format_portal_display(portal_enum.value)] = []
@@ -406,26 +427,21 @@ def create_portal_hubs(applications: list["ApplicationRecord"], portals_dir: Pat
     for portal_name, apps in portal_to_apps.items():
         if not apps and portal_name == "unknown":
             continue
+        sorted_apps = sorted(apps, key=lambda a: a.match_score, reverse=True)
         portal_tag = slugify(portal_name) or "portal"
         lines = [
             "---",
             f"tags: [portal, {portal_tag}]",
             "---",
             "",
-            f"# Portal: {portal_name}",
+            f"# 🌐 Portal: {portal_name}",
             "",
-            f"**Total vacantes:** {len(apps)}",
+            f"**Total vacantes:** {len(sorted_apps)}",
             "",
-            "## Vacantes Rastreadas",
+            "## 📊 Tabla de Vacantes Rastreadas",
             "",
+            *_format_applications_table(sorted_apps),
         ]
-        for app in apps:
-            note_name = _get_app_note_name(app)
-            safe_status = sanitize_for_filename(app.status.value)
-            lines.append(
-                f"- [[{note_name}]] — {app.title} @ [[{sanitize_for_filename(app.company)}]] "
-                f"({app.match_score}%) — [[{safe_status}]]"
-            )
 
         safe_name = sanitize_for_filename(portal_name)
         file_path = portals_dir / f"{safe_name}.md"
@@ -433,7 +449,7 @@ def create_portal_hubs(applications: list["ApplicationRecord"], portals_dir: Pat
 
 
 def create_status_hubs(applications: list["ApplicationRecord"], status_dir: Path) -> None:
-    """Create individual status hub pages in vault/status/<status>.md."""
+    """Create individual status hub pages in vault/status/<status>.md with a table."""
     status_to_apps: dict[str, list["ApplicationRecord"]] = {
         status.value: [] for status in ApplicationStatus
     }
@@ -441,27 +457,132 @@ def create_status_hubs(applications: list["ApplicationRecord"], status_dir: Path
         status_to_apps.setdefault(app.status.value, []).append(app)
 
     for status_name, apps in status_to_apps.items():
+        sorted_apps = sorted(apps, key=lambda a: a.match_score, reverse=True)
         status_tag = slugify(status_name) or "status"
         lines = [
             "---",
             f"tags: [status, {status_tag}]",
             "---",
             "",
-            f"# Estado: {status_name}",
+            f"# 📋 Estado: {status_name}",
             "",
-            f"**Total vacantes:** {len(apps)}",
+            f"**Total vacantes:** {len(sorted_apps)}",
             "",
-            "## Vacantes en este Estado",
+            "## 📊 Vacantes en este Estado",
             "",
+            *_format_applications_table(sorted_apps),
         ]
-        for app in apps:
-            note_name = _get_app_note_name(app)
-            portal = format_portal_display(app.submissions[0].portal.value) if app.submissions else "unknown"
-            lines.append(
-                f"- [[{note_name}]] — {app.title} @ [[{sanitize_for_filename(app.company)}]] "
-                f"({app.match_score}%) — [[{sanitize_for_filename(portal)}]]"
-            )
 
         safe_name = sanitize_for_filename(status_name)
         file_path = status_dir / f"{safe_name}.md"
         file_path.write_text("\n".join(lines), encoding="utf-8")
+
+
+def build_dashboard_hub(applications: list["ApplicationRecord"], vault_root: Path) -> None:
+    """Build master 00-Dashboard.md and 01-Tabla-Maestra-Vacantes.md in Excel-like table format."""
+    sorted_apps = sorted(applications, key=lambda a: a.match_score, reverse=True)
+    high_match = [a for a in sorted_apps if a.match_score >= 70]
+    mid_match = [a for a in sorted_apps if 40 <= a.match_score < 70]
+    low_match = [a for a in sorted_apps if a.match_score < 40]
+    companies_count = len({a.company for a in applications})
+    skills_counter: Counter[str] = Counter()
+    for app in applications:
+        for kw in app.keywords:
+            skills_counter[kw.keyword] += 1
+
+    status_counts: Counter[str] = Counter(a.status.value for a in applications)
+
+    # 1. Write 01-Tabla-Maestra-Vacantes.md (Full Excel-like Master Spreadsheet)
+    master_lines = [
+        "---",
+        "tags: [spreadsheet, jobos, table]",
+        "cssclasses: [wide-page, max]",
+        "---",
+        "",
+        "# 📊 Tabla Maestra de Vacantes (Vista Hoja de Cálculo)",
+        "",
+        f"Base de datos tabular completa con las **{len(sorted_apps)} vacantes** ordenadas de mayor a menor afinidad.",
+        "Puedes hacer clic en cualquier **Cargo**, **Empresa**, **Portal**, **Estado**, **Skill** o en **🔗 Abrir** para ir directo a la oferta.",
+        "",
+        "## 📋 Todas las Vacantes Registradas",
+        "",
+        *_format_applications_table(sorted_apps),
+        "",
+        "---",
+        "",
+        "## ⚡ Vista Dinámica (Plugin Dataview — Opcional)",
+        "> [!TIP] Si instalas el plugin comunitario **Dataview** o **DB Folder** en Obsidian, el siguiente bloque se convierte en una tabla dinámica filtrable automáticamente:",
+        "",
+        "```dataview",
+        "TABLE WITHOUT ID",
+        '  file.link AS "Vacante",',
+        '  company_link AS "Empresa",',
+        '  match_score + "%" AS "Match",',
+        '  modality AS "Modalidad",',
+        '  portal_link AS "Portal",',
+        '  status_link AS "Estado",',
+        '  first_applied_at AS "Fecha"',
+        'FROM "jobOS/applications"',
+        "SORT match_score DESC",
+        "```",
+    ]
+    master_table_path = vault_root / "01-Tabla-Maestra-Vacantes.md"
+    master_table_path.write_text("\n".join(master_lines), encoding="utf-8")
+
+    # 2. Write 00-Dashboard.md with KPI table + Categorized Excel-like Tables
+    lines = [
+        "---",
+        "tags: [dashboard, jobos, moc]",
+        "cssclasses: [wide-page, max]",
+        "---",
+        "",
+        "# 🎯 jobOS — Cuartel de Inteligencia Laboral",
+        "",
+        "Panel central organizado en formato **Tabla / Hoja de Cálculo**.",
+        "",
+        "## 🗂️ Navegación Rápida",
+        "",
+        "| Vista / Carpeta | Descripción | Cantidad |",
+        "| :--- | :--- | :---: |",
+        f"| 📊 **[[01-Tabla-Maestra-Vacantes\\|Tabla Maestra Completa (Tipo Excel)]]** | Todas las vacantes en una sola hoja de cálculo | **{len(applications)}** |",
+        f"| 🏢 **[[companies/index\\|Tabla de Empresas (companies/)]]** | Empresas contratantes y su mejor Match % | **{companies_count}** |",
+        f"| 🛠️ **[[skills/index\\|Tabla de Tecnologías (skills/)]]** | Ranking de tecnologías más pedidas en el mercado | **{len(skills_counter)}** |",
+        "| 🌐 **[[portals/index\\|Tabla de Portales (portals/)]]** | Comparativa por portal (LinkedIn, GetOnBrd, Computrabajo...) | **6** |",
+        "| 📋 **[[status/index\\|Tabla de Estados (status/)]]** | Seguimiento del pipeline de postulaciones | **7** |",
+        "",
+        "## 📈 Indicadores Clave (KPIs)",
+        "",
+        "| Total Vacantes | 🟢 Alta Afinidad (≥ 70%) | 🟡 Afinidad Media (40–69%) | Empresas Únicas | Skills Detectadas |",
+        "| :---: | :---: | :---: | :---: | :---: |",
+        f"| **{len(applications)}** | **{len(high_match)}** | **{len(mid_match)}** | **{companies_count}** | **{len(skills_counter)}** |",
+        "",
+        f"## 🔥 Tabla de Vacantes — Alta Afinidad (≥ 70%) [{len(high_match)}]",
+        "",
+        *_format_applications_table(high_match),
+        "",
+        f"## ⚡ Tabla de Vacantes — Afinidad Media (40% – 69%) [{len(mid_match)}]",
+        "",
+        *_format_applications_table(mid_match),
+    ]
+
+    if low_match:
+        lines.extend([
+            "",
+            f"## 📌 Tabla de Otras Vacantes (< 40%) [{len(low_match)}]",
+            "",
+            *_format_applications_table(low_match),
+        ])
+
+    lines.extend([
+        "",
+        "## 🛠️ Top 15 Tecnologías Más Demandadas",
+        "",
+        "| # | Tecnología | Vacantes que la solicitan |",
+        "| :---: | :--- | :---: |",
+    ])
+    for idx, (skill, count) in enumerate(skills_counter.most_common(15), start=1):
+        safe_sk = sanitize_for_filename(skill)
+        lines.append(f"| {idx} | [[{safe_sk}\\|{_escape_md_cell(skill)}]] | **{count}** |")
+
+    dashboard_path = vault_root / "00-Dashboard.md"
+    dashboard_path.write_text("\n".join(lines), encoding="utf-8")
