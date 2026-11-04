@@ -3,14 +3,12 @@ import pytest
 
 from src.adapters.db.repository import ApplicationRepository
 from src.domain.models import (
-    AnswerSource,
     ApplicationStatus,
     JobOffer,
     KeywordMatch,
     KeywordWeight,
     MatchEvaluation,
     PortalName,
-    QuestionCategory,
     WorkModality,
 )
 
@@ -203,34 +201,6 @@ def test_keyword_stats_aggregates_unique_jobs_not_reapplication_count(
     assert stats_dict["PostgreSQL"] == 1
 
 
-def test_qa_memory_upsert_and_retrieve(repo: ApplicationRepository) -> None:
-    repo.upsert_qa_memory(
-        question_norm="cuantos anos de experiencia tienes con react",
-        raw_example="¿Cuántos años de experiencia tienes con React?",
-        answer="2 años desarrollando proyectos full stack",
-        category=QuestionCategory.EXPERIENCE,
-        source=AnswerSource.PROFILE_SEED,
-    )
-
-    all_qa = repo.get_all_qa_memory()
-    assert len(all_qa) == 1
-    assert all_qa[0][0] == "cuantos anos de experiencia tienes con react"
-    assert all_qa[0][2] == "2 años desarrollando proyectos full stack"
-
-    # Update with confirmed answer
-    repo.upsert_qa_memory(
-        question_norm="cuantos anos de experiencia tienes con react",
-        raw_example="Años de experiencia con React.js:",
-        answer="3 años demostrables en portafolio y proyectos",
-        category=QuestionCategory.EXPERIENCE,
-        source=AnswerSource.USER_CONFIRMED,
-    )
-
-    updated_qa = repo.get_all_qa_memory()
-    assert len(updated_qa) == 1
-    assert updated_qa[0][2] == "3 años demostrables en portafolio y proyectos"
-
-
 def test_insert_or_ignore_keywords_does_not_raise_on_duplicate_association(
     repo: ApplicationRepository,
 ) -> None:
@@ -257,115 +227,43 @@ def test_insert_or_ignore_keywords_does_not_raise_on_duplicate_association(
     assert len(reapplied_record.keywords) == 4
 
 
-def test_record_discovered_offer_creates_pending_record_with_count_zero(
-    repo: ApplicationRepository,
-) -> None:
-    offer, evaluation = _make_sample_offer(PortalName.LINKEDIN)
-    record, is_new, is_reapplication = repo.record_discovered_offer(offer, evaluation)
+def test_existing_db_migration_adds_and_backfills_company_and_title_norm() -> None:
+    import sqlite3
 
-    assert is_new is True
-    assert is_reapplication is False
-    assert record.times_applied == 0
-    assert record.status == ApplicationStatus.PENDING
-    assert record.first_applied_at is None
-    assert record.last_applied_at is None
-    assert record.target_url == evaluation.canonical_url
-    assert record.portal == PortalName.LINKEDIN
-    assert len(record.submissions) == 0
-    assert len(record.keywords) == 4
-
-
-def test_record_discovered_offer_idempotent_when_already_pending(
-    repo: ApplicationRepository,
-) -> None:
-    offer, evaluation = _make_sample_offer(PortalName.LINKEDIN)
-    record1, is_new1, is_reapp1 = repo.record_discovered_offer(offer, evaluation)
-    assert is_new1 is True
-
-    record2, is_new2, is_reapp2 = repo.record_discovered_offer(offer, evaluation)
-    assert is_new2 is False
-    assert is_reapp2 is False
-    assert record2.id == record1.id
-    assert record2.times_applied == 0
-    assert record2.status == ApplicationStatus.PENDING
-
-
-def test_mark_applied_transitions_from_pending_to_applied(
-    repo: ApplicationRepository,
-) -> None:
-    offer, evaluation = _make_sample_offer(PortalName.LINKEDIN)
-    record, _, _ = repo.record_discovered_offer(offer, evaluation)
-
-    applied_record = repo.mark_applied(
-        application_id=record.id,
-        portal=PortalName.LINKEDIN,
-        canonical_url=evaluation.canonical_url,
-        applied_at="2026-10-28T12:00:00Z",
+    conn = sqlite3.connect(":memory:")
+    # Simulate an older DB table without company_norm / title_norm
+    conn.execute(
+        """
+        CREATE TABLE applications (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            dedup_key TEXT NOT NULL UNIQUE,
+            title TEXT NOT NULL,
+            company TEXT NOT NULL,
+            location TEXT NOT NULL,
+            modality TEXT NOT NULL,
+            description TEXT NOT NULL,
+            match_score INTEGER NOT NULL,
+            times_applied INTEGER NOT NULL DEFAULT 0,
+            status TEXT NOT NULL DEFAULT 'Pendiente',
+            notion_page_id TEXT UNIQUE,
+            first_applied_at TEXT,
+            last_applied_at TEXT,
+            created_at TEXT NOT NULL DEFAULT '2026-11-01T00:00:00Z',
+            updated_at TEXT NOT NULL DEFAULT '2026-11-01T00:00:00Z'
+        );
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO applications (dedup_key, title, company, location, modality, description, match_score)
+        VALUES ('techcorp::backend dev', 'Backend Dev', 'TechCorp S.A.S.', 'Remoto', 'remote', 'Python', 85);
+        """
     )
 
-    assert applied_record.status == ApplicationStatus.APPLIED
-    assert applied_record.times_applied == 1
-    assert applied_record.first_applied_at == "2026-10-28T12:00:00Z"
-    assert applied_record.last_applied_at == "2026-10-28T12:00:00Z"
-    assert len(applied_record.submissions) == 1
-    assert applied_record.submissions[0].attempt_number == 1
-    assert applied_record.submissions[0].portal == PortalName.LINKEDIN
-    assert applied_record.submissions[0].canonical_url == evaluation.canonical_url
+    migrated_repo = ApplicationRepository(conn)
+    records = migrated_repo.find_all()
+    assert len(records) == 1
+    assert records[0].company == "TechCorp S.A.S."
+    migrated_repo.close()
 
 
-def test_record_discovered_offer_reapplication_sets_status_pending(
-    repo: ApplicationRepository,
-) -> None:
-    offer1, evaluation1 = _make_sample_offer(PortalName.LINKEDIN, "https://linkedin.com/jobs/1")
-    record1, _, _ = repo.record_discovered_offer(offer1, evaluation1)
-    applied_record = repo.mark_applied(
-        application_id=record1.id,
-        portal=PortalName.LINKEDIN,
-        canonical_url=evaluation1.canonical_url,
-        applied_at="2026-10-20T10:00:00Z",
-    )
-    assert applied_record.status == ApplicationStatus.APPLIED
-    assert applied_record.times_applied == 1
-
-    # New offer on GetOnBrd (eligible to reapply)
-    offer2, evaluation2 = _make_sample_offer(PortalName.GETONBRD, "https://getonbrd.com/jobs/2")
-    reapp_record, is_new, is_reapp = repo.record_discovered_offer(offer2, evaluation2)
-
-    assert is_new is False
-    assert is_reapp is True
-    assert reapp_record.status == ApplicationStatus.PENDING
-    assert reapp_record.times_applied == 1  # Not incremented until mark_applied!
-    assert reapp_record.target_url == evaluation2.canonical_url
-    assert reapp_record.portal == PortalName.GETONBRD
-
-
-
-
-def test_find_similar_dedup_key_matches_near_identical_title_only() -> None:
-    from src.domain.text_normalizer import build_dedup_key
-
-    repository = ApplicationRepository(":memory:")
-    offer = JobOffer(
-        portal=PortalName.LINKEDIN,
-        title="Desarrollador Full Stack Junior",
-        company="Acme",
-        location="Remoto",
-        modality=WorkModality.REMOTE,
-        url="https://linkedin.com/jobs/view/1",
-    )
-    key = build_dedup_key(offer.company, offer.title)
-    evaluation = MatchEvaluation(
-        dedup_key=key,
-        canonical_url=offer.url,
-        match_score=80,
-        should_apply=True,
-        is_hard_rejected=False,
-        rejection_reason=None,
-        keywords=(),
-    )
-    repository.record_discovered_offer(offer, evaluation)
-
-    assert repository.find_similar_dedup_key(build_dedup_key("Acme", "Junior Desarrollador Full Stack")) == key
-    assert repository.find_similar_dedup_key(build_dedup_key("Acme", "Desarrollador Backend Senior")) is None
-    assert repository.find_similar_dedup_key(build_dedup_key("Otra", "Desarrollador Full Stack Junior")) is None
-    repository.close()

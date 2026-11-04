@@ -1,9 +1,6 @@
 from dataclasses import dataclass
 from pathlib import Path
-from dotenv import load_dotenv
 import yaml
-
-load_dotenv()
 
 from src.domain.models import (
     CandidatePersonalInfo,
@@ -14,27 +11,286 @@ from src.domain.models import (
 )
 
 
+DEFAULT_TECH_ALIASES: dict[str, str] = {
+    # C-family
+    "c#": "csharp",
+    "csharp": "csharp",
+    "c sharp": "csharp",
+    "c++": "cpp",
+    "cpp": "cpp",
+    "c plus plus": "cpp",
+    "c": "c",
+    # .NET ecosystem
+    ".net": "dotnet",
+    "dotnet": "dotnet",
+    "dot net": "dotnet",
+    "asp.net": "aspnet",
+    "aspnet": "aspnet",
+    "asp.net core": "aspnetcore",
+    "aspnetcore": "aspnetcore",
+    ".net core": "dotnetcore",
+    "dotnet core": "dotnetcore",
+    "dotnetcore": "dotnetcore",
+    ".net framework": "dotnetframework",
+    "dotnet framework": "dotnetframework",
+    "entity framework": "entityframework",
+    "entityframework": "entityframework",
+    "ef core": "efcore",
+    "efcore": "efcore",
+    # JavaScript/TypeScript
+    "js": "javascript",
+    "javascript": "javascript",
+    "ecmascript": "javascript",
+    "es6": "javascript",
+    "es2015": "javascript",
+    "ts": "typescript",
+    "typescript": "typescript",
+    "node.js": "nodejs",
+    "nodejs": "nodejs",
+    "node": "nodejs",
+    "deno": "deno",
+    "bun": "bun",
+    # Frontend frameworks
+    "react.js": "react",
+    "reactjs": "react",
+    "react": "react",
+    "next.js": "nextjs",
+    "nextjs": "nextjs",
+    "next": "nextjs",
+    "vue.js": "vue",
+    "vuejs": "vue",
+    "vue": "vue",
+    "nuxt.js": "nuxt",
+    "nuxtjs": "nuxt",
+    "svelte": "svelte",
+    "sveltekit": "sveltekit",
+    "angular": "angular",
+    "angularjs": "angularjs",
+    # Backend frameworks
+    "express.js": "express",
+    "expressjs": "express",
+    "express": "express",
+    "nest.js": "nestjs",
+    "nestjs": "nestjs",
+    "nest": "nestjs",
+    "fastify": "fastify",
+    "koa": "koa",
+    "hapi": "hapi",
+    "spring boot": "springboot",
+    "springboot": "springboot",
+    "spring": "spring",
+    "django": "django",
+    "flask": "flask",
+    "fastapi": "fastapi",
+    "gin": "gin",
+    "echo": "echo",
+    # Databases
+    "postgresql": "postgresql",
+    "postgres": "postgresql",
+    "pg": "postgresql",
+    "mysql": "mysql",
+    "mariadb": "mariadb",
+    "sqlite": "sqlite",
+    "sqlite3": "sqlite",
+    "mongodb": "mongodb",
+    "mongo": "mongodb",
+    "redis": "redis",
+    "cassandra": "cassandra",
+    "dynamodb": "dynamodb",
+    "elasticsearch": "elasticsearch",
+    "elastic": "elasticsearch",
+    "sql server": "sqlserver",
+    "sqlserver": "sqlserver",
+    "mssql": "sqlserver",
+    "oracle": "oracle",
+    "oracle db": "oracle",
+    # ORMs
+    "prisma": "prisma",
+    "typeorm": "typeorm",
+    "sequelize": "sequelize",
+    "knex": "knex",
+    "drizzle": "drizzle",
+    "sqlalchemy": "sqlalchemy",
+    "gorm": "gorm",
+    "hibernate": "hibernate",
+    "jpa": "jpa",
+    # Cloud & DevOps
+    "aws": "aws",
+    "amazon web services": "aws",
+    "azure": "azure",
+    "gcp": "gcp",
+    "google cloud": "gcp",
+    "google cloud platform": "gcp",
+    "docker": "docker",
+    "docker compose": "docker compose",
+    "kubernetes": "kubernetes",
+    "k8s": "kubernetes",
+    "terraform": "terraform",
+    "ansible": "ansible",
+    "jenkins": "jenkins",
+    "github actions": "githubactions",
+    "githubactions": "githubactions",
+    "gitlab ci": "gitlabci",
+    "gitlabci": "gitlabci",
+    "circleci": "circleci",
+    "travis": "travis",
+    "travis ci": "travis",
+    # APIs & Protocols
+    "rest api": "restapi",
+    "restapi": "restapi",
+    "rest": "restapi",
+    "graphql": "graphql",
+    "grpc": "grpc",
+    "websocket": "websocket",
+    "websockets": "websocket",
+    "api": "api",
+    # Testing
+    "jest": "jest",
+    "vitest": "vitest",
+    "mocha": "mocha",
+    "chai": "chai",
+    "cypress": "cypress",
+    "playwright": "playwright",
+    "selenium": "selenium",
+    "pytest": "pytest",
+    "junit": "junit",
+    "testng": "testng",
+    # Other tools
+    "git": "git",
+    "github": "github",
+    "gitlab": "gitlab",
+    "bitbucket": "bitbucket",
+    "linux": "linux",
+    "unix": "unix",
+    "bash": "bash",
+    "shell": "shell",
+    "ci/cd": "cicd",
+    "ci-cd": "cicd",
+    "cicd": "cicd",
+    "ci cd": "cicd",
+    "tailwind": "tailwind",
+    "tailwind css": "tailwind",
+    "bootstrap": "bootstrap",
+    "sass": "sass",
+    "scss": "sass",
+    "less": "less",
+    "webpack": "webpack",
+    "vite": "vite",
+    "rollup": "rollup",
+    "esbuild": "esbuild",
+    "babel": "babel",
+    "eslint": "eslint",
+    "prettier": "prettier",
+    "ts-node": "tsnode",
+    "tsnode": "tsnode",
+    "nodemon": "nodemon",
+    "pm2": "pm2",
+    "nginx": "nginx",
+    "apache": "apache",
+    "varnish": "varnish",
+    "haproxy": "haproxy",
+}
+
+
+def normalize_tech_token(token: str) -> str:
+    """Clean leading/trailing punctuation (preserving .net) and normalize via alias map."""
+    raw = token.strip().lower()
+    if raw.startswith(".net"):
+        cleaned = raw.rstrip(".-")
+    else:
+        cleaned = raw.strip(".-")
+    if not cleaned:
+        return ""
+    return DEFAULT_TECH_ALIASES.get(cleaned, cleaned)
+
+
 @dataclass(frozen=True, slots=True)
 class MatchingRules:
     min_match_score: int = 40
     reapply_cooldown_days: int = 3
     short_description_base_score: int = 65
-    max_years_experience: int = 3
 
 
 @dataclass(frozen=True, slots=True)
 class TechVocabulary:
-    core: tuple[str, ...]
-    secondary: tuple[str, ...]
-    bonus: tuple[str, ...]
+    core: tuple[str, ...] = ()
+    secondary: tuple[str, ...] = ()
+    bonus: tuple[str, ...] = ()
+    multi_word: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "core", tuple(self.core))
+        object.__setattr__(self, "secondary", tuple(self.secondary))
+        object.__setattr__(self, "bonus", tuple(self.bonus))
+        if self.multi_word:
+            object.__setattr__(self, "multi_word", tuple(self.multi_word))
+        else:
+            mw = tuple(
+                kw
+                for kw in (*self.core, *self.secondary, *self.bonus)
+                if " " in kw or "/" in kw
+            )
+            object.__setattr__(self, "multi_word", mw)
 
     def get_weight(self, keyword: str) -> KeywordWeight:
-        keyword_lower = keyword.lower()
-        if any(keyword_lower == k.lower() for k in self.core):
-            return KeywordWeight.CORE
-        if any(keyword_lower == k.lower() for k in self.secondary):
+        keyword_lower = keyword.strip().lower()
+        keyword_norm = normalize_tech_token(keyword)
+        for k in self.core:
+            if keyword_lower == k.lower() or (keyword_norm and keyword_norm == normalize_tech_token(k)):
+                return KeywordWeight.CORE
+        for k in self.secondary:
+            if keyword_lower == k.lower() or (keyword_norm and keyword_norm == normalize_tech_token(k)):
+                return KeywordWeight.SECONDARY
+        for k in self.bonus:
+            if keyword_lower == k.lower() or (keyword_norm and keyword_norm == normalize_tech_token(k)):
+                return KeywordWeight.BONUS
+        if any(keyword_lower == m.lower() or (keyword_norm and keyword_norm == normalize_tech_token(m)) for m in self.multi_word):
             return KeywordWeight.SECONDARY
         return KeywordWeight.BONUS
+
+    def get_all_keywords(self) -> list[str]:
+        seen: set[str] = set()
+        result: list[str] = []
+        for kw in (*self.core, *self.secondary, *self.bonus, *self.multi_word):
+            low = kw.lower()
+            if low not in seen:
+                seen.add(low)
+                result.append(kw)
+        return result
+
+    def get_aliases(self, canonical: str) -> list[str]:
+        norm = normalize_tech_token(canonical)
+        aliases: list[str] = []
+        seen: set[str] = set()
+        for candidate_alias, target_norm in DEFAULT_TECH_ALIASES.items():
+            if target_norm == norm and candidate_alias not in seen:
+                seen.add(candidate_alias)
+                aliases.append(candidate_alias)
+        if canonical.lower() not in seen:
+            aliases.append(canonical.lower())
+        return aliases
+
+    def is_single_word(self, token: str) -> bool:
+        norm = normalize_tech_token(token)
+        if not norm:
+            return False
+        for kw in (*self.core, *self.secondary, *self.bonus):
+            if token.lower() == kw.lower() or norm == normalize_tech_token(kw):
+                return True
+        return False
+
+    def is_multi_word(self, term: str) -> bool:
+        low = term.strip().lower()
+        if any(low == m.lower() for m in self.multi_word):
+            return True
+        for kw in (*self.core, *self.secondary, *self.bonus):
+            if (" " in kw or "/" in kw) and (low == kw.lower() or normalize_tech_token(low) == normalize_tech_token(kw)):
+                return True
+        return False
+
+    @property
+    def all_terms(self) -> set[str]:
+        return {kw.lower() for kw in self.get_all_keywords()}
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,7 +302,6 @@ class FilterConfig:
     company_blacklist: tuple[str, ...]
     location_whitelist: tuple[str, ...]
     tech_vocabulary: TechVocabulary
-    onsite_location_whitelist: tuple[str, ...] = ()
 
 
 def _extract_string_tuple(data: dict[str, object], key: str) -> tuple[str, ...]:
@@ -73,7 +328,6 @@ def load_filter_config(config_path: Path | str = "config/filters.yaml") -> Filte
         min_match_score=int(matching_dict.get("min_match_score", 40)),
         reapply_cooldown_days=int(matching_dict.get("reapply_cooldown_days", 3)),
         short_description_base_score=int(matching_dict.get("short_description_base_score", 65)),
-        max_years_experience=int(matching_dict.get("max_years_experience", 3)),
     )
 
     profile_raw = raw_data.get("candidate_profile", {})
@@ -105,7 +359,6 @@ def load_filter_config(config_path: Path | str = "config/filters.yaml") -> Filte
         company_blacklist=_extract_string_tuple(raw_data, "company_blacklist"),
         location_whitelist=_extract_string_tuple(raw_data, "location_whitelist"),
         tech_vocabulary=tech_vocabulary,
-        onsite_location_whitelist=_extract_string_tuple(raw_data, "onsite_location_whitelist"),
     )
 
 

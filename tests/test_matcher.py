@@ -8,7 +8,7 @@ from src.domain.matcher import OfferMatcher
 
 @pytest.fixture
 def filter_config() -> FilterConfig:
-    config_path = Path("config/filters.yaml")
+    config_path = Path("tests/fixtures/test_filters.yaml")
     return load_filter_config(config_path)
 
 
@@ -87,7 +87,7 @@ def test_matcher_rejects_location_outside_whitelist(matcher: OfferMatcher) -> No
 
 
 def test_matcher_accepts_partial_match_above_threshold(matcher: OfferMatcher) -> None:
-    # Offer asks for: React (3), Node.js (3), TypeScript (3), Kubernetes (1), Kafka (1), AWS (1), MongoDB (1)
+    # Offer asks for: React (3), Node.js (3), TypeScript (3), Kubernetes (1), Kafka (1), Python (1), MongoDB (1)
     # Total weight: 13. Candidate matches: React (3) + Node (3) + TS (3) = 9.
     # Score: round(9/13 * 100) = 69%
     offer = JobOffer(
@@ -99,7 +99,7 @@ def test_matcher_accepts_partial_match_above_threshold(matcher: OfferMatcher) ->
         url="https://getonbrd.com/jobs/5001",
         description=(
             "Requerimos Desarrollador con conocimientos en React, Node.js y TypeScript. "
-            "Deseable manejo de Kubernetes, Kafka, AWS y MongoDB."
+            "Deseable manejo de Kubernetes, Kafka, Python y MongoDB."
         ),
     )
     evaluation = matcher.evaluate(offer)
@@ -133,7 +133,7 @@ def test_matcher_accepts_high_affinity_match(matcher: OfferMatcher) -> None:
 
 
 def test_matcher_rejects_offer_below_threshold(matcher: OfferMatcher) -> None:
-    # Offer demands skills candidate doesn't have: AWS (1), MongoDB (1), Redis (1), GraphQL (1), Kubernetes (1), Kafka (1)
+    # Offer demands skills candidate doesn't have: Python (1), MongoDB (1), Redis (1), GraphQL (1), Kubernetes (1), Kafka (1)
     # Plus candidate only matches Linux (1).
     # Weight: 1/7 = 14% < 40%.
     offer = JobOffer(
@@ -143,7 +143,7 @@ def test_matcher_rejects_offer_below_threshold(matcher: OfferMatcher) -> None:
         location="Colombia Remoto",
         modality=WorkModality.REMOTE,
         url="https://elempleo.com/ofertas/7001",
-        description="Buscamos desarrollador con AWS, MongoDB, Redis, GraphQL, Kubernetes, Kafka en entorno Linux.",
+        description="Buscamos desarrollador con Python, MongoDB, Redis, GraphQL, Kubernetes, Kafka en entorno Linux.",
     )
     evaluation = matcher.evaluate(offer)
 
@@ -188,61 +188,3 @@ def test_matcher_generates_correct_dedup_key_and_canonical_url(matcher: OfferMat
     assert evaluation.dedup_key == "techcorp::desarrollador full stack junior react node"
     assert evaluation.canonical_url == "https://www.linkedin.com/jobs/view/99999"
 
-
-
-def _remote_offer(title: str, description: str, location: str = "Remoto, Colombia", modality: WorkModality = WorkModality.REMOTE) -> JobOffer:
-    return JobOffer(
-        portal=PortalName.GETONBRD,
-        title=title,
-        company="Acme",
-        location=location,
-        modality=modality,
-        url="https://getonbrd.com/jobs/acme-1",
-        description=description,
-    )
-
-
-def test_matcher_rejects_offer_requiring_too_many_years_in_description(matcher: OfferMatcher) -> None:
-    offer = _remote_offer("Desarrollador Backend", "Requisitos: 7 años de experiencia con Node.js y PostgreSQL.")
-    evaluation = matcher.evaluate(offer)
-
-    assert evaluation.is_hard_rejected is True
-    assert "7 years" in str(evaluation.rejection_reason)
-
-
-def test_matcher_ignores_years_unrelated_to_experience(matcher: OfferMatcher) -> None:
-    offer = _remote_offer("Desarrollador Backend", "Empresa con 10 años en el mercado. Buscamos Node.js, React y PostgreSQL.")
-    evaluation = matcher.evaluate(offer)
-
-    assert evaluation.is_hard_rejected is False
-
-
-def test_matcher_rejects_onsite_offer_outside_barranquilla(matcher: OfferMatcher) -> None:
-    offer = _remote_offer(
-        "Desarrollador Full Stack Junior",
-        "React, Node.js y PostgreSQL.",
-        location="Bogotá, Colombia",
-        modality=WorkModality.ONSITE,
-    )
-    evaluation = matcher.evaluate(offer)
-
-    assert evaluation.is_hard_rejected is True
-    assert "on-site" in str(evaluation.rejection_reason)
-
-
-def test_matcher_rejects_title_outside_whitelist(matcher: OfferMatcher) -> None:
-    offer = _remote_offer("Conductor de camión", "Licencia C2. Manejo de Excel, React y Node.js.")
-    evaluation = matcher.evaluate(offer)
-
-    assert evaluation.is_hard_rejected is True
-    assert "whitelisted" in str(evaluation.rejection_reason)
-
-
-@pytest.mark.parametrize(
-    ("text", "keyword"),
-    [("NestJS", "NestJS"), ("Nest.js", "NestJS"), ("NodeJS", "Node.js"), ("Node.js", "Node.js"), ("ReactJS", "React")],
-)
-def test_keyword_detection_accepts_common_spellings(text: str, keyword: str) -> None:
-    from src.domain.matcher import keyword_in_text
-
-    assert keyword_in_text(f"Buscamos experiencia en {text}.", keyword) is True

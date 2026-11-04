@@ -1,68 +1,203 @@
-import csv
+"""jobOS-bot v2.0 - 4 Nuclear CLI Commands.
+
+Clean Architecture + CQS + Multi-Worker + Obsidian Graph Database.
+Only 4 commands: scan, sync, auth, export.
+All other operations via MCP server.
+"""
+
+from dotenv import load_dotenv
+load_dotenv()
+
 import json
-from pathlib import Path
+import os
 import sys
-from typing import Any
+from pathlib import Path
+from typing import Optional, cast
 
 import click
-from dotenv import load_dotenv
-
-load_dotenv()
-from rich.markdown import Markdown
+from rich.console import Console
 
 from src.adapters.db.repository import ApplicationRepository
-from src.config_loader import load_filter_config
-from src.domain.models import ApplicationStatus, PortalName
-from src.services.assist_service import AssistService
-from src.services.career_service import CareerService
-from src.services.cv_service import CvService
-from src.services.scan_service import ScanService
-from src.ui.console import (
-    console,
-    print_application_stats,
-    print_banner,
-    print_error,
-    print_export_success,
-    print_pending_applications_table,
-    print_scan_summary,
-    print_warning,
+from src.adapters.obsidian.adapter import ObsidianVaultAdapter
+from src.adapters.scrapers.orchestrator import (
+    MultiWorkerScraperOrchestrator,
+    DEFAULT_PORTAL_REGISTRY,
 )
+from src.application.commands import (
+    ScanPortalsCommand,
+    ScanPortalsResult,
+    SyncVaultCommand,
+    SyncVaultResult,
+    SyncExternalCommand,
+    SyncExternalResult,
+)
+from src.application.handlers import (
+    ScanPortalsHandler,
+    SyncVaultHandler,
+    SyncExternalHandler,
+)
+from src.application.queries import (
+    GetApplicationsQuery,
+    GetApplicationsResult,
+)
+from src.application.handlers import GetApplicationsHandler
+from src.config_loader import load_filter_config
+from src.domain.models import PortalName
+from src.ports.repository_port import ApplicationRepositoryPort
+from src.ports.vault_port import KnowledgeVaultPort
+from src.ports.scraper_port import MultiPortalScraperPort
+
+
+console = Console()
+
+
+def print_banner(title: str, subtitle: str = "") -> None:
+    console.print(f"\n[bold cyan]═══ {title} ═══[/bold cyan]")
+    if subtitle:
+        console.print(f"[dim]{subtitle}[/dim]")
+    console.print()
+
+
+def print_error(message: str) -> None:
+    console.print(f"[bold red]✗ Error:[/bold red] {message}")
+
+
+def print_success(message: str) -> None:
+    console.print(f"[bold green]✓ {message}[/bold green]")
+
+
+def print_warning(message: str) -> None:
+    console.print(f"[bold yellow]⚠ {message}[/bold yellow]")
+
+
+def print_info(message: str) -> None:
+    console.print(f"[cyan]ℹ {message}[/cyan]")
+
+
+def _resolve_obsidian_vault_path(
+    vault_path: str | None,
+    subfolder: str | None = None,
+) -> str:
+    """Resolve external Obsidian vault path from CLI option or .env (OBSIDIAN_VAULT_PATH / VAULT_PATH).
+
+    When using OBSIDIAN_VAULT_PATH from .env (or when --subfolder is provided),
+    automatically places all jobOS files inside a dedicated subfolder (default: 'jobOS')
+    inside the Obsidian vault so the user's vault root stays clean and organized.
+    """
+    explicit_vault = (vault_path or "").strip()
+    env_vault = (
+        os.getenv("OBSIDIAN_VAULT_PATH", "").strip()
+        or os.getenv("VAULT_PATH", "").strip()
+    )
+    raw = explicit_vault or env_vault
+    if not raw:
+        raise ValueError(
+            "Ruta del Vault de Obsidian no configurada. "
+            "Pasa '--vault-dir /ruta/a/tu/boveda' o define OBSIDIAN_VAULT_PATH=/ruta/a/tu/boveda en .env"
+        )
+    resolved = Path(raw).expanduser().resolve()
+    project_root = Path(__file__).parent.resolve()
+    if resolved == project_root or project_root in resolved.parents:
+        raise ValueError(
+            f"El Vault de Obsidian debe estar en una ruta externa fuera de este proyecto (recibido: '{resolved}'). "
+            "Indica la ruta donde tienes tu bóveda de Obsidian con '--vault-dir /ruta/a/tu/obsidian' o en .env (OBSIDIAN_VAULT_PATH)."
+        )
+
+    effective_subfolder = (
+        subfolder.strip()
+        if subfolder is not None
+        else (os.getenv("OBSIDIAN_VAULT_SUBFOLDER", "jobOS").strip() if not explicit_vault else "")
+    )
+    if effective_subfolder and resolved.name.lower() != effective_subfolder.lower():
+        resolved = resolved / effective_subfolder
+
+    return str(resolved)
+
 
 
 @click.group()
 def cli() -> None:
-    """jobOS-bot — Asistente de Búsqueda Laboral y Automatización Hexagonal."""
+    """jobOS-bot v2.0 — Concurrent Multi-Worker Intelligence Engine with Local Graph Database.
+
+    4 Nuclear Commands:
+      scan   - Multi-worker concurrent scan with Obsidian sync
+      sync   - Obsidian vault sync (rebuild or incremental)
+      auth   - Browser authentication for portals
+      export - Export applications to JSON/CSV
+    """
     pass
 
+
+# ============================================================================
+# SCAN COMMAND - Multi-worker concurrent scan with Obsidian sync
+# ============================================================================
 
 @cli.command(name="scan")
 @click.option(
     "--portal",
     "portal_arg",
     default="all",
-    help="Portal a escanear: linkedin, getonbrd, computrabajo, elempleo, glassdoor, indeed o all (separados por coma).",
+    help="Portales a escanear: linkedin, getonbrd, computrabajo, elempleo, glassdoor, indeed o all (separados por coma).",
 )
 @click.option(
     "--limit",
     "limit_arg",
-    default=10,
+    default=15,
     type=int,
     help="Límite máximo de ofertas a procesar por portal.",
 )
 @click.option(
     "--headless/--no-headless",
-    default=False,
-    help="Ejecutar el navegador de forma invisible (headless) o visible. Con HEADLESS=true en el entorno siempre es invisible.",
+    default=True,
+    help="Ejecutar el navegador en modo headless (invisible) o visible.",
+)
+@click.option(
+    "--workers",
+    "max_workers",
+    default=4,
+    type=int,
+    help="Número máximo de workers concurrentes (1-6).",
 )
 @click.option(
     "--db-path",
     default="data/jobs.db",
     help="Ruta al archivo SQLite local.",
 )
-def scan_cmd(portal_arg: str, limit_arg: int, headless: bool, db_path: str) -> None:
-    """Escanea portales de empleo de forma secuencial single-thread y registra postulaciones."""
-    print_banner("jobOS-bot — Motor de Escaneo Multi-Portal", "Ejecución secuencial single-thread con graceful degradation")
+@click.option(
+    "--vault-dir",
+    "--vault-path",
+    "vault_path",
+    default=None,
+    help="Ruta externa a tu bóveda de Obsidian (o variable OBSIDIAN_VAULT_PATH en .env).",
+)
+@click.option(
+    "--subfolder",
+    default=None,
+    help="Subcarpeta dedicada dentro de la bóveda de Obsidian (por defecto OBSIDIAN_VAULT_SUBFOLDER='jobOS').",
+)
+@click.option(
+    "--no-obsidian",
+    is_flag=True,
+    default=False,
+    help="Desactivar sincronización con Obsidian vault.",
+)
+def scan_cmd(
+    portal_arg: str,
+    limit_arg: int,
+    headless: bool,
+    max_workers: int,
+    db_path: str,
+    vault_path: str | None,
+    subfolder: str | None,
+    no_obsidian: bool,
+) -> None:
+    """Escaneo multi-worker concurrente con aislamiento de BrowserContext y sync a Obsidian."""
+    print_banner(
+        "jobOS-bot v2.0 — Motor Multi-Worker Concurrente",
+        f"Workers: {max_workers} | Headless: {headless} | Obsidian: {'OFF' if no_obsidian else 'ON'}"
+    )
 
+    # Parse portals
     portals: list[PortalName] = []
     if portal_arg.lower().strip() == "all":
         portals = list(PortalName)
@@ -78,43 +213,324 @@ def scan_cmd(portal_arg: str, limit_arg: int, headless: bool, db_path: str) -> N
         print_error("No se especificaron portales válidos para el escaneo.")
         sys.exit(1)
 
-    repo = ApplicationRepository(db_path)
-    config = load_filter_config()
-    service = ScanService(repository=repo, config=config)
-
+    # Initialize dependencies
     try:
-        summary = service.run_scan_pipeline(
+        repo = ApplicationRepository(db_path)
+
+        config = load_filter_config()
+
+        # Multi-worker orchestrator
+        orchestrator: MultiPortalScraperPort = cast(
+            MultiPortalScraperPort,
+            MultiWorkerScraperOrchestrator(
+                registry=DEFAULT_PORTAL_REGISTRY,
+                max_workers=max_workers,
+            ),
+        )
+
+        # Vault adapter (optional)
+        vault: KnowledgeVaultPort | None = None
+        resolved_vault_path = ""
+        sync_obsidian_enabled = not no_obsidian
+        if sync_obsidian_enabled:
+            try:
+                resolved_vault_path = _resolve_obsidian_vault_path(vault_path, subfolder)
+                vault = ObsidianVaultAdapter(resolved_vault_path)
+            except ValueError as ve:
+                if vault_path is not None:
+                    raise
+                print_warning(f"Sincronización con Obsidian omitida en este escaneo: {ve}")
+                sync_obsidian_enabled = False
+
+        # Create and execute command via handler
+        command = ScanPortalsCommand(
             portals=portals,
             limit_per_portal=limit_arg,
             headless=headless,
+            max_workers=max_workers,
+            sync_obsidian=sync_obsidian_enabled,
+            vault_path=resolved_vault_path,
+            config=config,
         )
-        print_scan_summary(summary)
+
+        handler = ScanPortalsHandler(
+            repository=repo,
+            scraper=orchestrator,
+            vault=vault,
+        )
+
+        result: ScanPortalsResult = handler.handle(command)
+
+        # Print summary
+        _print_scan_summary(result)
+
+    except Exception as ex:
+        print_error(f"Error durante el escaneo: {ex}")
+        sys.exit(1)
     finally:
-        repo.close()
+        try:
+            repo.close()
+        except Exception:
+            pass
 
 
-@cli.command(name="stats")
+def _print_scan_summary(result: ScanPortalsResult) -> None:
+    """Print formatted scan summary."""
+    console.print()
+    console.print(f"[bold]TOTAL ESCANEADO:[/bold] {result.total_scanned} ofertas")
+    console.print(f"[bold]TOTAL MATCH (≥{40}%):[/bold] {result.total_matched}")
+    console.print(f"[green]Nuevas postulaciones:[/green] {result.new_applications}")
+    console.print(f"[blue]Re-postulaciones:[/blue] {result.reapplications}")
+    console.print(f"[yellow]Saltadas por cooldown:[/yellow] {result.skipped_cooldown}")
+    console.print(f"[red]Hard rejects:[/red] {result.hard_rejected}")
+
+    if result.offers_by_portal:
+        console.print("\n[bold]Por portal:[/bold]")
+        for portal, count in result.offers_by_portal.items():
+            console.print(f"  {portal}: {count}")
+
+    if result.errors_by_portal:
+        console.print("\n[bold red]Errores:[/bold red]")
+        for portal, error in result.errors_by_portal.items():
+            console.print(f"  {portal}: {error}")
+
+    if result.obsidian_synced:
+        console.print(f"\n[bold cyan]Obsidian:[/bold cyan] {result.obsidian_created} creadas, {result.obsidian_updated} actualizadas")
+
+    console.print(f"\n[dim]Tiempo de ejecución: {result.execution_time_ms}ms[/dim]")
+
+
+# ============================================================================
+# SYNC COMMAND - Obsidian vault sync (rebuild or incremental)
+# ============================================================================
+
+@cli.command(name="sync")
 @click.option(
     "--db-path",
     default="data/jobs.db",
     help="Ruta al archivo SQLite local.",
 )
-def stats_cmd(db_path: str) -> None:
-    """Muestra estadísticas actuales del pipeline y radar de tecnologías más demandadas."""
-    print_banner("jobOS-bot — Estadísticas y Radar de Mercado", "Resumen de aplicaciones SQLite 3NF")
-    db_file = Path(db_path)
-    if not db_file.is_file():
-        print_warning(f"No existe la base de datos en '{db_path}'. Ejecuta un escaneo primero con 'scan'.")
-        return
+@click.option(
+    "--vault-dir",
+    "--vault-path",
+    "vault_path",
+    default=None,
+    help="Ruta externa a tu bóveda de Obsidian (o variable OBSIDIAN_VAULT_PATH en .env).",
+)
+@click.option(
+    "--subfolder",
+    default=None,
+    help="Subcarpeta dedicada dentro de la bóveda de Obsidian (por defecto OBSIDIAN_VAULT_SUBFOLDER='jobOS').",
+)
+@click.option(
+    "--target",
+    type=click.Choice(["obsidian", "notion"], case_sensitive=False),
+    default="obsidian",
+    help="Destino de sincronización: obsidian (por defecto) o notion (secundario).",
+)
+@click.option(
+    "--rebuild/--incremental",
+    default=False,
+    help="Reconstruir vault completo (borra notas existentes) o sync incremental.",
+)
+def sync_cmd(
+    db_path: str,
+    vault_path: str | None,
+    subfolder: str | None,
+    target: str,
+    rebuild: bool,
+) -> None:
+    """Sincroniza base de datos SQLite con vault Obsidian (Graphify-compatible) o Notion."""
+    target_norm = target.strip().lower()
+    action = "REBUILD completo" if rebuild else "INCREMENTAL"
 
-    repo = ApplicationRepository(db_path)
     try:
-        records = repo.find_all(limit=500)
-        kw_stats = repo.get_keyword_stats()
-        print_application_stats(records, kw_stats)
-    finally:
-        repo.close()
+        resolved_vault_path = ""
+        if target_norm == "obsidian":
+            resolved_vault_path = _resolve_obsidian_vault_path(vault_path, subfolder)
 
+        print_banner(
+            f"jobOS-bot v2.0 — Sync {target_norm.capitalize()} ({action})",
+            f"DB: {db_path} | Target: {target_norm}"
+            + (f" | Vault: {resolved_vault_path}" if resolved_vault_path else ""),
+        )
+
+        repo = ApplicationRepository(db_path)
+        applications = repo.find_all(limit=10000)
+
+        if target_norm == "notion":
+            from src.adapters.notion.notion_client import NotionClient
+            from src.config_loader import FilterConfig
+            from src.domain.models import ApplicationRecord
+            from src.ports.external_sync_port import ExternalSyncPort, SyncReport
+
+            class _NotionExternalSyncAdapter(ExternalSyncPort):
+                def __init__(self, client: NotionClient, repository: ApplicationRepository) -> None:
+                    self._client = client
+                    self._repo = repository
+
+                @property
+                def is_configured(self) -> bool:
+                    return self._client.is_configured
+
+                def sync(self) -> SyncReport:
+                    apps = self._repo.find_all(limit=10000)
+                    return self.sync_applications(apps, load_filter_config())
+
+                def sync_applications(
+                    self,
+                    applications: list[ApplicationRecord],
+                    config: FilterConfig | None = None,
+                ) -> SyncReport:
+                    if not self._client.is_configured:
+                        return SyncReport()
+                    pushed = 0
+                    updated = 0
+                    for app in applications:
+                        if app.notion_page_id:
+                            if self._client.update_application(app.notion_page_id, app):
+                                updated += 1
+                        else:
+                            page_id = self._client.push_application(app)
+                            if page_id and app.id is not None:
+                                self._repo.update_notion_page_id(app.id, page_id)
+                                pushed += 1
+                    bootstrapped = self._client.bootstrap_to_repository(self._repo)
+                    return SyncReport(
+                        pushed_new=pushed,
+                        updated_existing=updated,
+                        bootstrapped_from_notion=bootstrapped,
+                    )
+
+            notion_client = NotionClient()
+            ext_adapter = _NotionExternalSyncAdapter(notion_client, repo)
+            ext_command = SyncExternalCommand(
+                applications=applications,
+                config=load_filter_config(),
+                target="notion",
+            )
+            ext_handler = SyncExternalHandler(external_sync=ext_adapter, repository=repo)
+            ext_result: SyncExternalResult = ext_handler.handle(ext_command)
+            print_success(
+                f"Notion sincronizado: {ext_result.pushed_new} nuevas, "
+                f"{ext_result.updated_existing} actualizadas, "
+                f"{ext_result.bootstrapped_from_external} importadas"
+            )
+            console.print(f"[dim]Tiempo: {ext_result.execution_time_ms}ms[/dim]")
+        else:
+            vault = ObsidianVaultAdapter(resolved_vault_path)
+            command = SyncVaultCommand(
+                applications=applications,
+                vault_path=resolved_vault_path,
+                full_rebuild=rebuild,
+            )
+            handler = SyncVaultHandler(vault=vault)
+            result: SyncVaultResult = handler.handle(command)
+
+            print_success(
+                f"Vault sincronizado: {result.created} creadas, "
+                f"{result.updated} actualizadas, {result.hubs_updated} hubs"
+            )
+            console.print(f"[dim]Tiempo: {result.execution_time_ms}ms[/dim]")
+
+    except Exception as ex:
+        print_error(f"Error sincronizando: {ex}")
+        sys.exit(1)
+    finally:
+        try:
+            repo.close()
+        except Exception:
+            pass
+
+
+# ============================================================================
+# AUTH COMMAND - Browser authentication for portals
+# ============================================================================
+
+PORTAL_LOGIN_URLS: dict[str, str] = {
+    "linkedin": "https://www.linkedin.com/login",
+    "glassdoor": "https://www.glassdoor.com/profile/login_input.htm",
+    "computrabajo": "https://candidato.computrabajo.com/login",
+    "elempleo": "https://www.elempleo.com/co/iniciar-sesion",
+    "indeed": "https://secure.indeed.com/auth",
+    "getonbrd": "https://www.getonbrd.com/login",
+}
+
+
+@cli.command(name="auth")
+@click.argument("portal", required=False, default=None)
+@click.option(
+    "--output",
+    "output_path",
+    default=None,
+    help="Ruta donde se guardará el estado de cookies y tokens de sesión.",
+)
+def auth_cmd(portal: Optional[str], output_path: Optional[str]) -> None:
+    """Abre el navegador en modo visible para iniciar sesión manual en un portal y exportar cookies."""
+    from playwright.sync_api import sync_playwright
+
+    portal_name = (portal or "linkedin").strip().lower()
+    target_url = PORTAL_LOGIN_URLS.get(portal_name, f"https://www.{portal_name}.com")
+
+    if output_path is not None:
+        out_file = Path(output_path)
+    else:
+        out_file = Path(f"data/sessions/{portal_name}_state.json")
+
+    out_file.parent.mkdir(parents=True, exist_ok=True)
+
+    print_banner(
+        f"jobOS-bot v2.0 — Gestor de Autenticación [{portal_name.upper()}]",
+        "Inicia sesión manualmente en el navegador y presiona ENTER en la consola cuando termines.",
+    )
+
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(
+            headless=False,
+            args=[
+                "--disable-blink-features=AutomationControlled",
+                "--no-sandbox",
+                "--disable-infobars",
+            ],
+        )
+        context = browser.new_context(
+            user_agent=(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/133.0.0.0 Safari/537.36"
+            ),
+            viewport={"width": 1280, "height": 800},
+            locale="es-419",
+            extra_http_headers={"Accept-Language": "es-419,es;q=0.9,en;q=0.8"},
+            timezone_id="America/Bogota",
+        )
+        context.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+        page = context.new_page()
+
+        console.print(f"[green]Navegador abierto en:[/green] [cyan]{target_url}[/cyan]")
+        console.print("[yellow]Inicia sesión (resuelve Captcha o 2FA si aplica) y luego presiona ENTER en esta terminal...[/yellow]")
+        console.print("[dim cyan]💡 Tip: Si el portal te muestra 'Couldn't sign you in' con Google, ingresa con correo y contraseña directa del portal.[/dim cyan]")
+
+        page.goto(target_url)
+        input()
+
+        context.storage_state(path=str(out_file))
+
+        # Sincronizar en data/storage_state.json para el motor de escaneo
+        default_global_state = Path("data/storage_state.json")
+        default_global_state.parent.mkdir(parents=True, exist_ok=True)
+        context.storage_state(path=str(default_global_state))
+
+        context.close()
+        browser.close()
+
+    console.print(f"[bold green]✓ Sesión exportada correctamente a:[/bold green] {out_file}")
+    console.print(f"[dim]✓ Sincronizado en: {default_global_state}[/dim]")
+
+
+# ============================================================================
+# EXPORT COMMAND - Export applications to JSON/CSV
+# ============================================================================
 
 @cli.command(name="export")
 @click.option(
@@ -141,17 +557,31 @@ def stats_cmd(db_path: str) -> None:
     default="data/jobs.db",
     help="Ruta al archivo SQLite local.",
 )
-def export_cmd(export_format: str, output_arg: str | None, status_arg: str | None, db_path: str) -> None:
+def export_cmd(export_format: str, output_arg: Optional[str], status_arg: Optional[str], db_path: str) -> None:
     """Exporta las vacantes registradas en SQLite a formato JSON o CSV."""
+    print_banner(
+        "jobOS-bot v2.0 — Exportación de Datos",
+        f"Formato: {export_format.upper()} | Filtro: {status_arg or 'Todos'}"
+    )
+
     db_file = Path(db_path)
     if not db_file.is_file():
         print_error(f"Base de datos no encontrada en '{db_path}'.")
         sys.exit(1)
 
-    repo = ApplicationRepository(db_path)
     try:
-        app_status = ApplicationStatus(status_arg) if status_arg else None
-        records = repo.find_all(status=app_status, limit=1000)
+        repo = ApplicationRepository(db_path)
+
+        # Use query handler for consistent data access
+        query = GetApplicationsQuery(
+            status=status_arg,
+            min_match_score=None,
+            keyword=None,
+            limit=10000,
+            offset=0,
+        )
+        handler = GetApplicationsHandler(repository=repo)
+        result: GetApplicationsResult = handler.handle(query)
 
         out_path = Path(output_arg) if output_arg else Path(f"exports/applications.{export_format.lower()}")
         out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -159,438 +589,59 @@ def export_cmd(export_format: str, output_arg: str | None, status_arg: str | Non
         if export_format.lower() == "json":
             data = [
                 {
-                    "id": r.id,
-                    "dedup_key": r.dedup_key,
-                    "title": r.title,
-                    "company": r.company,
-                    "location": r.location,
-                    "modality": r.modality.value,
-                    "match_score": r.match_score,
-                    "times_applied": r.times_applied,
-                    "status": r.status.value,
-                    "first_applied_at": r.first_applied_at,
-                    "last_applied_at": r.last_applied_at,
+                    "id": app.id,
+                    "dedup_key": app.dedup_key,
+                    "title": app.title,
+                    "company": app.company,
+                    "location": app.location,
+                    "modality": app.modality,
+                    "match_score": app.match_score,
+                    "times_applied": app.times_applied,
+                    "status": app.status,
+                    "first_applied_at": app.first_applied_at,
+                    "last_applied_at": app.last_applied_at,
                     "submissions": [
                         {
                             "attempt": s.attempt_number,
-                            "portal": s.portal.value,
+                            "portal": s.portal,
                             "url": s.canonical_url,
                             "applied_at": s.applied_at,
                         }
-                        for s in r.submissions
+                        for s in app.submissions
                     ],
                     "keywords": [
                         {"keyword": k.keyword, "matched": k.is_matched, "weight": int(k.weight)}
-                        for k in r.keywords
+                        for k in app.keywords
                     ],
                 }
-                for r in records
+                for app in result.applications
             ]
             out_path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
         else:
+            import csv
             with out_path.open("w", newline="", encoding="utf-8") as f:
                 writer = csv.writer(f)
                 writer.writerow([
                     "ID", "Título", "Empresa", "Ubicación", "Modalidad",
                     "Match %", "Veces Postulado", "Estado", "Primer Intento", "Último Intento"
                 ])
-                for r in records:
+                for app in result.applications:
                     writer.writerow([
-                        r.id, r.title, r.company, r.location, r.modality.value,
-                        r.match_score, r.times_applied, r.status.value,
-                        r.first_applied_at or "", r.last_applied_at or ""
+                        app.id, app.title, app.company, app.location, app.modality,
+                        app.match_score, app.times_applied, app.status,
+                        app.first_applied_at or "", app.last_applied_at or ""
                     ])
 
-        print_export_success(export_format, str(out_path), len(records))
-    finally:
-        repo.close()
+        print_success(f"Exportado {len(result.applications)} registros a {out_path}")
 
-
-@cli.command(name="tailor")
-@click.argument("job_id", type=int)
-@click.option("--db-path", default="data/jobs.db", help="Ruta al archivo SQLite local.")
-def tailor_cmd(job_id: int, db_path: str) -> None:
-    """Optimiza tu CV para una vacante específica detectando la brecha de keywords ATS."""
-    repo = ApplicationRepository(db_path)
-    try:
-        service = CareerService(repository=repo)
-        analysis = service.tailor_cv(job_id)
-        print_banner(f"jobOS-bot — Adaptación Quirúrgica de CV (Vacante #{job_id})")
-        console.print(Markdown(analysis))
     except Exception as ex:
-        print_error(str(ex))
+        print_error(f"Error exportando: {ex}")
         sys.exit(1)
     finally:
-        repo.close()
-
-
-@cli.command(name="cv")
-@click.argument("targets", nargs=-1, required=False)
-@click.option("--all", "-a", "all_pending", is_flag=True, default=False, help="Generar CV para todas las vacantes pendientes.")
-@click.option("--min-score", default=None, type=int, help="Con --all, solo vacantes con afinidad mínima (ej. 60).")
-@click.option("--force", is_flag=True, default=False, help="Regenerar el PDF aunque ya exista.")
-@click.option("--db-path", default="data/jobs.db", help="Ruta al archivo SQLite local.")
-def cv_cmd(targets: tuple[str, ...], all_pending: bool, min_score: int | None, force: bool, db_path: str) -> None:
-    """Genera un PDF de tu CV adaptado a cada vacante (ej. 'cv 4 7' o 'cv --all --min-score 60'). No postula."""
-    from src.adapters.pdf.cv_renderer import PlaywrightPdfRenderer
-
-    if not Path(db_path).is_file():
-        print_error(f"Base de datos no encontrada en '{db_path}'. Ejecuta un escaneo primero con 'scan'.")
-        sys.exit(1)
-
-    repo = ApplicationRepository(db_path)
-    try:
-        ids: list[int] = []
-        for t in targets:
-            for token in t.replace(",", " ").split():
-                if token.isdigit():
-                    ids.append(int(token))
-                else:
-                    print_warning(f"'{token}' no es un ID numérico. Omitiendo.")
-
-        if all_pending:
-            pending = repo.find_all(status=ApplicationStatus.PENDING, limit=500)
-            ids += [r.id for r in pending if min_score is None or r.match_score >= min_score]
-
-        ids = list(dict.fromkeys(ids))
-        if not ids:
-            print_warning("No hay vacantes para procesar. Indica IDs (ej. 'cv 4 7') o usa '--all'.")
-            return
-
-        service = CvService(repository=repo)
-        print_banner("jobOS-bot — CV Personalizado por Vacante", f"{len(ids)} vacante(s) — salida en '{service.output_dir}/'")
-        generated = 0
-        with PlaywrightPdfRenderer() as renderer:
-            for app_id in ids:
-                try:
-                    result = service.generate(app_id, renderer, force=force)
-                except FileNotFoundError as ex:
-                    print_error(str(ex))
-                    sys.exit(1)
-                except Exception as ex:
-                    print_error(f"Vacante #{app_id}: {ex}")
-                    continue
-                if result.reused_existing:
-                    console.print(f"[dim]#{app_id} ya tenía CV:[/dim] [cyan]{result.pdf_path}[/cyan] [dim](usa --force para regenerar)[/dim]")
-                else:
-                    generated += 1
-                    console.print(f"[green]✓ #{app_id}[/green] [cyan]{result.pdf_path}[/cyan] [dim](resumen: {result.summary_source})[/dim]")
-
-        console.print(f"\n[bold green]CV generados: {generated}/{len(ids)}[/bold green]")
-    finally:
-        repo.close()
-
-
-@cli.command(name="prep")
-@click.argument("job_id", type=int)
-@click.option("--db-path", default="data/jobs.db", help="Ruta al archivo SQLite local.")
-def prep_cmd(job_id: int, db_path: str) -> None:
-    """Genera una guía técnica completa de entrevista (preguntas, live coding y preguntas para el entrevistador)."""
-    repo = ApplicationRepository(db_path)
-    try:
-        service = CareerService(repository=repo)
-        out_path = service.prepare_interview(job_id)
-        print_banner(f"jobOS-bot — Preparador de Entrevista Técnica (Vacante #{job_id})")
-        console.print(f"[bold green]Guía técnica generada con éxito en:[/bold green] [cyan]{out_path}[/cyan]")
-    except Exception as ex:
-        print_error(str(ex))
-        sys.exit(1)
-    finally:
-        repo.close()
-
-
-@cli.command(name="sync")
-@click.option("--db-path", default="data/jobs.db", help="Ruta al archivo SQLite local.")
-def sync_cmd(db_path: str) -> None:
-    """Sincroniza la base de datos local con Notion y detecta follow-ups estancados."""
-    print_banner("jobOS-bot — Sincronizador con Notion y Detección de Follow-ups")
-    repo = ApplicationRepository(db_path)
-    try:
-        service = CareerService(repository=repo)
-        report = service.sync_with_notion()
-        console.print(f"[green]• Vacantes nuevas enviadas a Notion (Push):[/green] {report.pushed_new}")
-        console.print(f"[blue]• Re-postulaciones actualizadas en Notion:[/blue] {report.updated_existing}")
-        console.print(f"[cyan]• Cambios de estado leídos desde Notion (Pull):[/cyan] {report.pulled_statuses}")
-        console.print(f"[magenta]• Guías técnicas generadas automáticamente:[/magenta] {report.interview_preps_triggered}")
-        console.print(f"[yellow]• Postulaciones marcadas para seguimiento (+7 días):[/yellow] {report.stalled_followups}")
-        if report.bootstrapped_from_notion > 0:
-            console.print(f"[bold green]• Vacantes restauradas desde Notion (Bootstrap Multi-PC):[/bold green] {report.bootstrapped_from_notion}")
-    except Exception as ex:
-        print_error(str(ex))
-        sys.exit(1)
-    finally:
-        repo.close()
-
-
-@cli.command(name="assist")
-@click.argument("targets", nargs=-1, required=False)
-@click.option("--all", "-a", "all_pending", is_flag=True, default=False, help="Procesar todas las vacantes pendientes en cola automáticamente sin preguntar.")
-@click.option("--min-score", default=None, type=int, help="Filtrar vacantes con puntaje mínimo de afinidad (ej. 70).")
-@click.option("--top", default=None, type=int, help="Procesar las mejores N vacantes pendientes en cola.")
-@click.option("--headless", is_flag=True, default=False, help="Ejecutar el navegador en segundo plano sin interfaz gráfica.")
-@click.option("--db-path", default="data/jobs.db", help="Ruta al archivo SQLite local.")
-def assist_cmd(
-    targets: tuple[str, ...],
-    all_pending: bool,
-    min_score: int | None,
-    top: int | None,
-    headless: bool,
-    db_path: str,
-) -> None:
-    """Abre el navegador en modo copiloto y autocompleta el formulario de postulación.
-
-    Permite enviar múltiples IDs en una sola línea (ej. 'python cli.py assist 1 3 5' o '1,3,5')
-    o URLs directas. Sin argumentos, muestra la lista de vacantes prioritarias pendientes.
-    """
-    db_file = Path(db_path)
-    if not db_file.is_file():
-        print_error(f"Base de datos no encontrada en '{db_path}'. Ejecuta un escaneo primero con 'scan'.")
-        sys.exit(1)
-
-    repo = ApplicationRepository(db_path)
-    try:
-        # 1. Parse tokens from arguments
-        tokens: list[str] = []
-        for t in targets:
-            for sub in t.replace(",", " ").split():
-                if sub.strip():
-                    tokens.append(sub.strip())
-
-        # 2. If no tokens provided, check options or show interactive table
-        if not tokens:
-            pending_records = repo.find_all(status=ApplicationStatus.PENDING, limit=100)
-            if not pending_records:
-                print_warning("No hay vacantes en estado 'Pendiente' en la base de datos.")
-                return
-
-            if min_score is not None:
-                pending_records = [r for r in pending_records if r.match_score >= min_score]
-
-            if top is not None:
-                pending_records = pending_records[:top]
-
-            if all_pending or top is not None or (min_score is not None and not targets):
-                tokens = [str(r.id) for r in pending_records]
-                if not tokens:
-                    msg = f" con Match >= {min_score}%" if min_score is not None else ""
-                    print_warning(f"No se encontraron vacantes pendientes{msg}.")
-                    return
-            else:
-                print_pending_applications_table(pending_records[:15])
-                console.print("\n[bold cyan]Selecciona las vacantes que deseas postular:[/bold cyan]")
-                prompt_input = click.prompt(
-                    "Ingresa uno o varios IDs (ej. '1 3 5' o '1,3,5') o 'q' para salir",
-                    default="q",
-                )
-                if prompt_input.strip().lower() in {"q", "quit", "exit"}:
-                    return
-                for sub in prompt_input.replace(",", " ").split():
-                    if sub.strip():
-                        tokens.append(sub.strip())
-
-        # 3. Resolve items to process
-        items_to_process: list[tuple[int | None, str, str, str, int | None]] = []
-        for token in tokens:
-            if token.isdigit():
-                app_id = int(token)
-                record = repo.find_by_id(app_id)
-                if not record:
-                    print_warning(f"Vacante con ID #{app_id} no existe en SQLite. Omitiendo.")
-                    continue
-                url = record.submissions[-1].canonical_url if record.submissions else None
-                if not url:
-                    print_warning(f"La vacante #{app_id} ({record.company} - {record.title}) no tiene URL registrada.")
-                    continue
-                items_to_process.append((app_id, url, record.title, record.company, record.match_score))
-            elif token.startswith("http://") or token.startswith("https://"):
-                items_to_process.append((None, token, "Postulación Directa", "Web", None))
-            else:
-                print_warning(f"Valor '{token}' no es un ID numérico ni una URL válida. Omitiendo.")
-
-        if not items_to_process:
-            print_warning("No hay vacantes válidas para procesar.")
-            return
-
-        # 4. Process each item sequentially in the queue
-        service = AssistService(repository=repo)
-        total_items = len(items_to_process)
-        completed_count = 0
-
-        for idx, (target_id, target_url, target_title, target_company, target_score) in enumerate(items_to_process, 1):
-            score_text = f" | Afinidad: [bold green]{target_score}%[/bold green]" if target_score is not None else ""
-            id_text = f"Vacante #{target_id}" if target_id else "Postulación Directa"
-            print_banner(
-                f"jobOS-bot — Cola de Postulación ({idx}/{total_items})",
-                f"{id_text}: {target_company} — {target_title}{score_text}",
-            )
-            console.print(f"[dim]URL: {target_url}[/dim]\n")
-
-            try:
-                service.run_assist(
-                    target_url,
-                    application_id=target_id,
-                    headless=headless,
-                )
-                completed_count += 1
-            except KeyboardInterrupt:
-                console.print("\n[yellow]Cola de postulación pausada por el usuario (Ctrl+C).[/yellow]")
-                break
-            except Exception as ex:
-                print_error(f"Fallo asistiendo vacante {id_text}: {ex}")
-
-            if idx < total_items:
-                console.print(f"\n[bold cyan]✓ Completada {idx}/{total_items}. Pasando a la siguiente vacante en cola...[/bold cyan]\n")
-
-        console.print(
-            f"\n[bold green]Sesión de asistencia finalizada:[/bold green] {completed_count}/{total_items} vacante(s) procesadas con éxito.\n"
-        )
-    finally:
-        repo.close()
-
-
-@cli.command(name="autopilot")
-@click.option(
-    "--portal",
-    "portal_arg",
-    default="all",
-    help="Portal a escanear: linkedin, getonbrd, computrabajo o all (separados por coma).",
-)
-@click.option(
-    "--limit",
-    "limit_arg",
-    default=15,
-    type=int,
-    help="Límite máximo de ofertas a inspeccionar por portal. Por defecto 15.",
-)
-@click.option(
-    "--headless",
-    is_flag=True,
-    default=False,
-    help="Ejecutar navegadores en segundo plano sin interfaz gráfica.",
-)
-@click.option(
-    "--db-path",
-    default="data/jobs.db",
-    help="Ruta al archivo SQLite local.",
-)
-def autopilot_cmd(
-    portal_arg: str,
-    limit_arg: int,
-    headless: bool,
-    db_path: str,
-) -> None:
-    """Ejecuta el ciclo desatendido: Escaneo -> Sync Notion. Nunca postula; usa 'assist' para eso."""
-    print_banner(
-        "jobOS-bot — Piloto Automático",
-        "Pipeline desatendido: 1. Escaneo Multi-Portal -> 2. Sync Notion (sin postular)",
-    )
-
-    portals: list[PortalName] = []
-    if portal_arg.lower().strip() == "all":
-        portals = list(PortalName)
-    else:
-        for p in portal_arg.split(","):
-            cleaned = p.strip().lower()
-            try:
-                portals.append(PortalName(cleaned))
-            except ValueError:
-                print_warning(f"Portal '{cleaned}' ignorado. Válidos: {[e.value for e in PortalName]}")
-
-    if not portals:
-        print_error("No se especificaron portales válidos.")
-        sys.exit(1)
-
-    repo = ApplicationRepository(db_path)
-    config = load_filter_config()
-    scan_service = ScanService(repository=repo, config=config)
-
-    try:
-        # FASE 1: Escaneo y clasificación
-        console.print("\n[bold cyan]━━━ FASE 1: Escaneo y descubrimiento de vacantes ━━━[/bold cyan]\n")
-        scan_summary = scan_service.run_scan_pipeline(
-            portals=portals,
-            limit_per_portal=limit_arg,
-            headless=headless,
-        )
-        print_scan_summary(scan_summary)
-
-        # FASE 2: Sincronización y CRM
-        console.print("\n[bold cyan]━━━ FASE 2: Sincronización con Notion CRM y Seguimiento ━━━[/bold cyan]\n")
         try:
-            career_service = CareerService(repository=repo)
-            report = career_service.sync_with_notion()
-            console.print(f"[green]• Vacantes nuevas enviadas a Notion (Push):[/green] {report.pushed_new}")
-            console.print(f"[blue]• Re-postulaciones actualizadas en Notion:[/blue] {report.updated_existing}")
-            console.print(f"[yellow]• Postulaciones marcadas para seguimiento (+7 días):[/yellow] {report.stalled_followups}")
-        except Exception as ex:
-            console.print(f"[yellow]Sincronización omitida o no configurada: {ex}[/yellow]")
-
-        console.print("\n[bold green]══════════════════════════════════════════════════════════[/bold green]")
-        console.print("[bold green]✓ Ciclo de Piloto Automático completado con éxito.[/bold green]")
-        console.print("[bold green]══════════════════════════════════════════════════════════[/bold green]\n")
-    finally:
-        repo.close()
-
-
-@cli.command(name="auth")
-@click.option(
-    "--output",
-    "output_path",
-    default="data/storage_state.json",
-    help="Ruta donde se guardará el estado de cookies y tokens de sesión.",
-)
-def auth_cmd(output_path: str) -> None:
-    """Abre el navegador en modo visible para iniciar sesión manual y exportar storage_state.json."""
-    from playwright.sync_api import sync_playwright
-
-    print_banner(
-        "jobOS-bot — Gestor de Autenticación de Portales",
-        "Inicia sesión en tus portales preferidos y presiona ENTER en la terminal para guardar cookies.",
-    )
-    out_file = Path(output_path)
-    out_file.parent.mkdir(parents=True, exist_ok=True)
-
-    user_dir = Path("data/browser_profile")
-    user_dir.mkdir(parents=True, exist_ok=True)
-
-    with sync_playwright() as playwright:
-        context = playwright.chromium.launch_persistent_context(
-            user_data_dir=str(user_dir),
-            headless=False,
-            locale="es-CO",
-            timezone_id="America/Bogota",
-            extra_http_headers={"Accept-Language": "es-CO,es-419;q=0.9,es;q=0.8,en;q=0.7"},
-            args=["--disable-blink-features=AutomationControlled"],
-        )
-        page = context.pages[0] if context.pages else context.new_page()
-
-        console.print("[green]✓ Navegador abierto con perfil persistente en 'data/browser_profile'.[/green]")
-        console.print("[dim]Accede a LinkedIn, GetOnBrd, Computrabajo, etc. e inicia sesión con tus cuentas.[/dim]")
-        console.print("[bold yellow]IMPORTANTE: No cierres la ventana del navegador todavía.[/bold yellow]")
-        console.print("[bold yellow]Una vez hayas iniciado sesión en tus portales, presiona ENTER aquí en la terminal...[/bold yellow]\n")
-
-        try:
-            page.goto("https://www.linkedin.com/login", wait_until="domcontentloaded", timeout=45000)
+            repo.close()
         except Exception:
             pass
-
-        try:
-            input()
-        except EOFError:
-            pass
-
-        try:
-            context.storage_state(path=str(out_file))
-            console.print(f"[bold green]✓ Sesión y cookies exportadas correctamente a:[/bold green] [cyan]{out_file}[/cyan]")
-        except Exception as ex:
-            console.print(f"[bold yellow]AVISO:[/bold yellow] La ventana del navegador se cerró antes de exportar '{out_file}'.")
-            console.print("[dim]Tus cookies ya quedaron guardadas automáticamente en disco en 'data/browser_profile'.[/dim]")
-            console.print("[dim]Si necesitas generar el archivo JSON para Docker o GitHub Actions, mantén la ventana abierta hasta presionar ENTER.[/dim]")
-        finally:
-            try:
-                context.close()
-            except Exception:
-                pass
 
 
 if __name__ == "__main__":

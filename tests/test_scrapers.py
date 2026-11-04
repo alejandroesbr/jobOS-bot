@@ -11,10 +11,14 @@ from src.adapters.scrapers.getonbrd import GetOnBrdScraper
 from src.adapters.scrapers.glassdoor import GlassdoorScraper
 from src.adapters.scrapers.indeed import IndeedScraper
 from src.adapters.scrapers.linkedin import LinkedInScraper
-from src.adapters.scrapers.orchestrator import ScraperOrchestrator
+from src.adapters.scrapers.orchestrator import (
+    MultiWorkerScraperOrchestrator,
+    PortalScanResult,
+)
+from src.application.commands import ScanPortalsCommand
+from src.application.handlers import ScanPortalsHandler
 from src.config_loader import FilterConfig, load_filter_config
-from src.domain.models import ApplicationStatus, JobOffer, PortalName, WorkModality
-from src.services.scan_service import ScanService
+from src.domain.models import JobOffer, PortalName, WorkModality
 
 
 @pytest.fixture
@@ -34,24 +38,6 @@ def test_detect_modality() -> None:
     assert detect_modality("Software Engineer - Teletrabajo Latam") == WorkModality.REMOTE
     assert detect_modality("Ingeniero de Software Híbrido en Barranquilla") == WorkModality.HYBRID
     assert detect_modality("Desarrollador Web Presencial en Sede") == WorkModality.ONSITE
-    assert detect_modality("100% presencial, no es remoto") == WorkModality.ONSITE
-    assert detect_modality("Trabajo en oficina, no remoto") == WorkModality.ONSITE
-
-
-def test_scraper_card_pre_filtering_word_boundary_avoids_false_positives(filter_config: FilterConfig) -> None:
-    scraper = GetOnBrdScraper()
-
-    # "Microservicios" contains "ios", but should NOT be rejected by word-boundary check
-    card_microservices = RawJobCard(
-        portal=PortalName.GETONBRD,
-        title="Desarrollador de Microservicios Junior",
-        company="Tech Innovators",
-        location="Remoto",
-        url="https://getonbrd.com/jobs/microservices-1",
-    )
-    allowed, reason = scraper.pre_filter_card(card_microservices, filter_config)
-    assert allowed is True, f"Falsely rejected: {reason}"
-
 
 
 def test_scraper_card_pre_filtering_rejects_blacklist(filter_config: FilterConfig) -> None:
@@ -95,7 +81,7 @@ def test_scraper_card_pre_filtering_rejects_blacklist(filter_config: FilterConfi
 
 
 def test_orchestrator_contains_all_six_portal_adapters() -> None:
-    orchestrator = ScraperOrchestrator()
+    orchestrator = MultiWorkerScraperOrchestrator()
     assert len(orchestrator.registry) == 6
     assert orchestrator.registry[PortalName.LINKEDIN] is LinkedInScraper
     assert orchestrator.registry[PortalName.GETONBRD] is GetOnBrdScraper
@@ -111,21 +97,25 @@ def test_orchestrator_handles_missing_or_failing_scraper_gracefully(filter_confi
     failing_instance = failing_scraper_cls.return_value
     failing_instance.scan.side_effect = RuntimeError("Cloudflare challenge block")
 
-    orchestrator = ScraperOrchestrator(
+    orchestrator = MultiWorkerScraperOrchestrator(
         registry={
             PortalName.GETONBRD: failing_scraper_cls,
-        }
+        },
+        default_retries=0,
     )
 
     # Mock the browser session so we don't open a real browser
     mock_context = MagicMock()
     mock_page = MagicMock()
     mock_context.new_page.return_value = mock_page
+    mock_session = MagicMock()
+    mock_session.__enter__.return_value = mock_context
+    mock_session.__exit__.return_value = False
 
     with pytest.MonkeyPatch.context() as mp:
         mp.setattr(
             "src.adapters.scrapers.orchestrator.create_browser_session",
-            MagicMock(return_value=MagicMock(__enter__=MagicMock(return_value=mock_context), __exit__=MagicMock())),
+            MagicMock(return_value=mock_session),
         )
         results = orchestrator.run_scan([PortalName.GETONBRD], filter_config)
 
@@ -135,7 +125,7 @@ def test_orchestrator_handles_missing_or_failing_scraper_gracefully(filter_confi
     assert "Cloudflare challenge block" in str(result.error_message)
 
 
-def test_scan_service_end_to_end_flow_with_mocked_orchestrator(
+def test_scan_portals_handler_end_to_end_flow_with_mocked_orchestrator(
     repo: ApplicationRepository,
     filter_config: FilterConfig,
 ) -> None:
@@ -158,18 +148,21 @@ def test_scan_service_end_to_end_flow_with_mocked_orchestrator(
         description="C# y .NET",
     )
 
-    mock_orch = MagicMock(spec=ScraperOrchestrator)
-    from src.adapters.scrapers.orchestrator import PortalScanResult
-
-    mock_orch.run_scan.return_value = {
+    mock_orch = MagicMock(spec=MultiWorkerScraperOrchestrator)
+    mock_orch.scan_all.return_value = {
         PortalName.GETONBRD: PortalScanResult(
             portal=PortalName.GETONBRD,
             offers=(offer_good, offer_hard_reject),
         )
     }
 
-    service = ScanService(repository=repo, config=filter_config, orchestrator=mock_orch)
-    summary = service.run_scan_pipeline(portals=[PortalName.GETONBRD])
+    handler = ScanPortalsHandler(repository=repo, scraper=mock_orch, vault=None)
+    command = ScanPortalsCommand(
+        portals=[PortalName.GETONBRD],
+        sync_obsidian=False,
+        config=filter_config,
+    )
+    summary = handler.handle(command)
 
     assert summary.total_scanned == 2
     assert summary.total_matched == 1
@@ -180,51 +173,4 @@ def test_scan_service_end_to_end_flow_with_mocked_orchestrator(
     all_apps = repo.find_all()
     assert len(all_apps) == 1
     assert all_apps[0].title == "Desarrollador Full Stack Junior"
-    assert all_apps[0].times_applied == 0
-    assert all_apps[0].status == ApplicationStatus.PENDING
-
-
-def test_scraper_reports_error_when_search_pages_show_no_cards(filter_config: FilterConfig, monkeypatch: pytest.MonkeyPatch) -> None:
-    from src.adapters.scrapers.base import PortalScrapeError
-
-    monkeypatch.setattr("src.adapters.scrapers.base.human_delay", lambda *_: None)
-    monkeypatch.setattr("src.adapters.scrapers.base.smooth_scroll", lambda *_a, **_k: None)
-    scraper = GetOnBrdScraper()
-    monkeypatch.setattr(scraper, "extract_cards", lambda _page: [])
-
-    with pytest.raises(PortalScrapeError, match="captcha"):
-        scraper.scan(MagicMock(), filter_config, limit=5)
-
-
-
-def test_scan_service_skips_invalid_offer_without_losing_the_rest(
-    repo: ApplicationRepository,
-    filter_config: FilterConfig,
-) -> None:
-    from src.adapters.scrapers.orchestrator import PortalScanResult
-
-    def offer(company: str, url: str) -> JobOffer:
-        return JobOffer(
-            portal=PortalName.GETONBRD,
-            title="Desarrollador Full Stack Junior",
-            company=company,
-            location="Remoto",
-            modality=WorkModality.REMOTE,
-            url=url,
-            description="Buscamos React, Node.js y PostgreSQL.",
-        )
-
-    mock_orch = MagicMock(spec=ScraperOrchestrator)
-    mock_orch.run_scan.return_value = {
-        PortalName.GETONBRD: PortalScanResult(
-            portal=PortalName.GETONBRD,
-            offers=(offer("---", "https://getonbrd.com/jobs/bad"), offer("Acme", "https://getonbrd.com/jobs/good")),
-        )
-    }
-
-    summary = ScanService(repository=repo, config=filter_config, orchestrator=mock_orch).run_scan_pipeline(
-        portals=[PortalName.GETONBRD]
-    )
-
-    assert summary.new_applications == 1
-    assert [r.company for r in repo.find_all()] == ["Acme"]
+    assert all_apps[0].times_applied == 1

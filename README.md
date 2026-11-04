@@ -1,359 +1,218 @@
-# jobOS-bot
+# jobOS-bot v2.0
 
-> **Copiloto en Python con Arquitectura Hexagonal para extracción multi-portal de vacantes, scoring ponderado de compatibilidad, autocompletado asistido de formularios, preparación técnica de entrevistas y Servidor MCP (`Model Context Protocol`).**
+> **Motor Concurrente de Inteligencia Laboral en Python 3.11+ con Clean Architecture, Patrón CQS, Scraping Multi-Worker en Playwright, Base de Datos en Grafo Local (Obsidian + Graphify) y Activación Zero-Daemon On-Demand via MCP.**
 
 ![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white)
-![Architecture](https://img.shields.io/badge/Architecture-Hexagonal%20%28Ports%20%26%20Adapters%29-008080)
-![Database](https://img.shields.io/badge/SQLite-3NF%20Normalized%20%2B%20WAL-003B57?logo=sqlite&logoColor=white)
-![Playwright](https://img.shields.io/badge/Playwright-Single--Thread%20Multi--Portal-2EAD33?logo=playwright&logoColor=white)
-![MCP](https://img.shields.io/badge/MCP-Native%20Stdio%20Server-6B4FBB)
-![Cost](https://img.shields.io/badge/Cloud%20Runtime-%240%2Fmonth%20%28GitHub%20Actions%29-success)
+![Architecture](https://img.shields.io/badge/Architecture-Clean%20%2B%20CQS%20%2B%20Hexagonal-008080)
+![Database](https://img.shields.io/badge/SQLite-3NF%20%2B%20B--Tree%20Blocking-003B57?logo=sqlite&logoColor=white)
+![Obsidian](https://img.shields.io/badge/Obsidian%20Vault-Graphify%20Wikilinks-7C3AED?logo=obsidian&logoColor=white)
+![Playwright](https://img.shields.io/badge/Playwright-Multi--Worker%20Pool-2EAD33?logo=playwright&logoColor=white)
+![MCP](https://img.shields.io/badge/MCP-Zero--Daemon%20On--Demand-6B4FBB)
 
-`jobOS-bot` automatiza el flujo completo de búsqueda y postulación a empleos de ingeniería de software (**Entry-Level / Junior**: `React`, `Node.js`, `NestJS`, `TypeScript`, `PostgreSQL`) en modalidad **Remota o Híbrida/Presencial (Barranquilla / Colombia)**.
-
-Está diseñado con un doble propósito:
-
-1. **Herramienta personal de alta efectividad diaria:** Corre tanto de forma interactiva en Windows 11 como de forma **desatendida con tu PC apagado a costo \$0.00/mes** mediante GitHub Actions, Docker y Notion.
-2. **Proyecto de Ingeniería de Software para Portafolio:** Construido bajo principios estrictos de **Clean Code, DRY, KISS, YAGNI**, tipado estático fuerte (`@dataclass(frozen=True, slots=True)`, `StrEnum`, `Literal`), base de datos relacional en **Tercera Forma Normal (3FN)**, servidor **MCP** nativo y suite de pruebas unitarias deterministas (**F.I.R.S.T.** con `pytest`).
+`jobOS-bot v2.0` es una unidad táctica de inteligencia laboral **On-Demand** que rastrea concurrentemente múltiples portales de empleo (`LinkedIn`, `GetOnBrd`, `Computrabajo`, `Elempleo`, `Glassdoor`, `Indeed`), evalúa compatibilidad mediante tokenización en $O(n)$ y suavizado bayesiano (`Match >= 40%`), deduplica ofertas con índices B-Tree compuestos en SQLite y construye automáticamente un **Grafo de Conocimiento Local en Obsidian (`vault/`)** listo para explorar con **Graphify** y aplicar con un solo clic (**Click-and-Apply**).
 
 ---
 
-## 1. Arquitectura General del Sistema (Hexagonal Ports & Adapters)
+## 1. Arquitectura v2.0: Clean Architecture + CQS + Multi-Worker + Obsidian Vault
 
 ```mermaid
-flowchart TB
-    subgraph Driving ["Puertos de Entrada (Driving Adapters)"]
-        CLI["Terminal CLI (cli.py + Rich UI)"]
-        MCP["MCP Server stdio (src/adapters/mcp/server.py)"]
-        GHA["GitHub Actions Cron (Modo Cloud $0 - PC Apagado)"]
+flowchart TD
+    subgraph Triggers ["Entrypoints On-Demand (Zero-Daemon)"]
+        MCP["Servidor MCP stdio\nsrc/adapters/mcp/server.py"]
+        CLI["Terminal CLI (Click + Rich)\ncli.py (scan | sync | auth | export)"]
     end
 
-    subgraph Application ["Capa de Aplicación (src/services/)"]
-        SCAN["scan_service.py\n(Escaneo + Scoring + Re-postulación)"]
-        ASSIST["assist_service.py\n(Autocompletado Human-in-the-Loop)"]
-        CAREER["career_service.py\n(Tailor CV + Prep Entrevista + Sync + Follow-ups)"]
+    subgraph Application ["Capa de Aplicación (Patrón CQS - src/application/)"]
+        subgraph Commands ["Commands (Escritura / Mutación)"]
+            CmdScan["ScanPortalsCommand & Handler"]
+            CmdVault["SyncVaultCommand & Handler"]
+            CmdExt["SyncExternalCommand & Handler"]
+        end
+        subgraph Queries ["Queries (Lectura Pura Idempotente)"]
+            QryApps["GetApplicationsQuery & Handler"]
+            QryById["GetApplicationByIdQuery & Handler"]
+        end
     end
 
-    subgraph Domain ["Núcleo de Dominio Puro (src/domain/ - 0% I/O, 100% Testeable)"]
-        MODELS["models.py\n(Immutable Dataclasses & Enums)"]
-        NORM["text_normalizer.py\n(Unicode NFD, Canonical URL, dedup_key)"]
-        MATCH["matcher.py\n(Hard Rejects + Match % >= 40%)"]
-        QA["qa_engine.py\n(RapidFuzz >= 85% + Reglas COP/USD)"]
+    subgraph Ports ["Capa de Puertos (Contratos Abstractos - src/ports/)"]
+        P_Repo["ApplicationRepositoryPort"]
+        P_Scraper["PortalScraperPort"]
+        P_Vault["KnowledgeVaultPort"]
+        P_Sync["ExternalSyncPort"]
     end
 
-    subgraph Driven ["Puertos de Salida (Driven Adapters - src/adapters/)"]
-        SCRAPERS["scrapers/ (Single-Thread Strategy + Template Method)\nLinkedIn | GetOnBrd | Computrabajo | Elempleo | Glassdoor | Indeed"]
-        DB[("SQLite 3FN (data/jobs.db)\napplications | application_submissions | application_keywords | qa_memory")]
-        AI["Gemini 2.5 Flash\n(Fallback QA + CV Tailor + Interview Prep)"]
-        NOTION["Notion REST API v1\n(Dashboard Móvil/Web + Bootstrap Multi-PC)"]
+    subgraph Domain ["Núcleo de Dominio Puro (src/domain/ - 0% I/O)"]
+        Models["models.py (JobOffer, ApplicationRecord)"]
+        Tokenizer["tech_tokenizer.py (Lexer O(n) + Hash Alias)"]
+        Bayesian["bayesian_scorer.py (Suavizado Bayesiano + IDF)"]
+        Fuzzy["fuzzy_matcher.py (Cascada O(1) -> Regex -> RapidFuzz)"]
+        Graph["graph_analyzer.py (Co-ocurrencia & Brechas)"]
+        Matcher["matcher.py & text_normalizer.py"]
     end
 
-    CLI & MCP & GHA --> Application
-    Application --> Domain
-    Application --> Driven
-    Driven --> Domain
+    subgraph Adapters ["Capa de Adaptadores (Infraestructura - src/adapters/)"]
+        A_Scrapers["MultiWorkerScraperOrchestrator\n(ThreadPoolExecutor + Playwright Aislado)"]
+        A_SQLite[("SQLiteApplicationRepository\n3FN + WAL + UPSERT + Blocking B-Tree")]
+        A_Obsidian["ObsidianVaultAdapter (Graphify)\nvault/applications | companies | skills | portals | status"]
+        A_Notion["NotionSyncAdapter (Opcional)\nSincronización secundaria REST"]
+    end
+
+    MCP --> Commands & Queries
+    CLI --> Commands & Queries
+    Commands & Queries --> Ports
+    Ports -.-> Domain
+    A_Scrapers -.->|Implementa| P_Scraper
+    A_SQLite -.->|Implementa| P_Repo
+    A_Obsidian -.->|Implementa| P_Vault
+    A_Notion -.->|Implementa| P_Sync
 ```
 
 ---
 
-## 2. Reglas de Negocio Centrales
+## 2. Pilares Técnicos y Algorítmicos de la v2.0
 
-### A. Postulación por Rango de Compatibilidad (`Match >= 40%`)
+### A. Activación Zero-Daemon On-Demand via MCP (`src/adapters/mcp/server.py`)
+El sistema tiene **costo cero de CPU/RAM en reposo**. Se activa únicamente cuando tu asistente de IA (`Claude Desktop`, `Cursor`, `Antigravity`) invoca una de sus **3 herramientas MCP** o cuando ejecutas la CLI:
+1. **`run_portal_scan_and_sync`**: Despacha el pool multi-worker concurrente, filtra vacantes (`match_score >= 40%`), persiste en SQLite con `UPSERT` atómico y sincroniza los nodos Markdown en el Vault de Obsidian.
+2. **`query_job_applications`**: Consulta analítica de solo lectura (`GetApplicationsQuery`) filtrando por estado, puntaje mínimo o portal.
+3. **`sync_obsidian_vault`**: Reconstruye íntegramente el grafo de Obsidian (`vault/`) desde SQLite (`SyncVaultCommand`).
 
-El bot **no exige cumplir el 100% de los requisitos** de una oferta para postular:
+### B. Orquestación Multi-Worker Concurrente (`MultiWorkerScraperOrchestrator`)
+* Ejecuta múltiples portales en paralelo mediante `ThreadPoolExecutor` (`--workers 4`).
+* Cada worker instancia su propio contexto aislado de Playwright para evitar condiciones de carrera y colisiones de sesión, manteniendo *graceful degradation* si un portal falla o presenta bloqueo.
 
-- **Hard Rejects (`0%`):** Si el título exige `Senior`, `Lead`, `Architect`, `+5 años` o tecnologías 100% ajenas (`.NET`, `PHP`, `COBOL`, `SAP`), descarta la oferta de inmediato sin abrir el detalle.
-- **Scoring Ponderado (`Match %`):** Cruza los requisitos de la oferta contra tu perfil asignando pesos (`3 pts` Core Stack: `React`, `Node.js`, `NestJS`, `TypeScript`, `JavaScript`, `PostgreSQL`; `2 pts` Secundarias; `1 pt` Complementarias).
-- **Disparo Inteligente (`>= 40%`):** Si la oferta alcanza al menos **`40%` de compatibilidad**, **el bot envía la hoja de vida y se postula de todos modos**, registrando tanto las tecnologías que coincidieron (`is_matched = 1`) como los requisitos faltantes (`is_matched = 0`) para preparar tu entrevista.
+### C. Motores Algorítmicos de Dominio (`src/domain/`)
+* **`TechTokenizer` ($O(n)$)**: Extrae tecnologías en una sola pasada preservando símbolos (`C#`, `C++`, `.NET`, `Node.js`) y resolviendo sinónimos en $O(1)$ mediante tabla hash, eliminando los falsos positivos de `\b` en motores regex NFA.
+* **Hard Rejects Exclusivos en Título**: Los descartes duros (`Senior`, `Lead`, `Architect`, `+5 años`) se evalúan únicamente sobre el título del cargo, nunca sobre el cuerpo descriptivo.
+* **`BayesianScorer` (Suavizado Bayesiano + IDF)**: Calcula el score ponderando evidencia con prior $p_0$, parámetro $\alpha$ e Inverse Document Frequency ($IDF(t)$) para premiar tecnologías distintivas sin saltos discontinuos.
+* **`FuzzyCascadeMatcher`**: Cascada de resolución en 3 etapas: Hash Exacto $O(1)$ $\rightarrow$ Plantillas parametrizadas Regex $O(L)$ $\rightarrow$ `RapidFuzz` con poda de Ukkonen (`score_cutoff >= 85%`).
+* **`GraphAnalyzer`**: Proyecta la red bipartita Vacante $\leftrightarrow$ Skill en un grafo de co-ocurrencia Skill-to-Skill y calcula la prioridad de aprendizaje $\text{Prioridad}(s) = \text{Demanda}(s) \times (1 - \text{Dominio}(s))$.
 
-### B. Re-Postulación con Registro Único (`times_applied` en 3FN)
-
-Cuando una empresa republica la misma oferta días después o la publica en varios portales a la vez:
-
-1. El normalizador genera una clave semántica única (`dedup_key = company_norm::title_norm`, ej. `globant::desarrollador full stack junior react node`).
-2. Si cumple la política de re-postulación (portal distinto o enfriamiento cumplido y el estado no es _Entrevista_ ni _Rechazado_), **el bot vuelve a enviar la hoja de vida**.
-3. **Nunca duplica la fila en SQLite ni en Notion:** Actualiza el mismo registro maestro incrementando **`times_applied = times_applied + 1`**, registra el intento en la tabla hija `application_submissions` y actualiza la propiedad `Veces Postulado` en Notion.
-
-### C. Copiloto de Formularios _Human-in-the-Loop_ (`qa_memory`)
-
-- Compara cada `<label>` del formulario contra tu memoria local en SQLite usando `RapidFuzz` (`< 0.5 ms`).
-- Si la similitud es **`>= 85%`**, rellena el campo al instante y pinta un **borde verde**.
-- Si es **`< 85%`**, consulta `gemini-2.5-flash` con tu `profile.yaml` (detectando automáticamente si el salario se pide en **COP** o **USD**), rellena la sugerencia con un **borde amarillo de revisión** y **se detiene antes de _Submit_** para que tú des el clic final.
+### D. Grafo Local en Obsidian + Graphify (`src/adapters/obsidian/`)
+Cada oferta genera una nota rica en `vault/applications/` con propiedades YAML y `[[Wikilinks]]` bidireccionales hacia nodos hub (`vault/companies/`, `vault/skills/`, `vault/portals/`, `vault/status/`), permitiendo identificar clústeres de mercado en **Graphify** y postular directamente mediante enlaces canónicos limpios (**Click-and-Apply**).
 
 ---
 
-## 3. Stack Tecnológico Completo
+## 3. Matriz de Comandos Nucleares de CLI (`cli.py`)
 
-| Capa                        | Tecnología                                         | Propósito                                                                                               |
-| :-------------------------- | :------------------------------------------------- | :------------------------------------------------------------------------------------------------------ |
-| **Lenguaje**                | **Python 3.11+** (`dataclasses`, `typing`, `enum`) | Código tipado de extremo a extremo, sin uso de `Any` entre capas.                                       |
-| **Scraping Multi-Portal**   | **Playwright** (`playwright`)                      | Ejecución _single-thread_ secuencial sobre 6 portales con pausas humanas (`2.5s–6.0s`).                 |
-| **Base de Datos**           | **SQLite 3** (`sqlite3` nativo en 3FN + `WAL`)     | 4 tablas normalizadas (`applications`, `application_submissions`, `application_keywords`, `qa_memory`). |
-| **Similitud y Reglas**      | **RapidFuzz** + **Regex** + **PyYAML**             | Matching difuso en microsegundos y reglas declarativas en `config/filters.yaml`.                        |
-| **Inteligencia Artificial** | **Google GenAI SDK** (`gemini-2.5-flash`)          | Respuestas a preguntas inéditas, adaptación de CV (`tailor`) y guías de entrevista (`prep`).            |
-| **Dashboard & Multi-PC**    | **Notion REST API v1** (`httpx`)                   | Sincronización _Push/Pull_ y _Bootstrap_ automático al clonar el repo en otro PC.                       |
-| **Agentes de IA**           | **MCP SDK** (`mcp` / `FastMCP` via `stdio`)        | Expone 5 herramientas para consultar tu base de datos desde Claude / Antigravity / Cursor.              |
-| **Interfaz CLI**            | **Rich** (`rich`)                                  | Tablas, barras de progreso y paneles en consola.                                                        |
-| **Testing & DevOps**        | **Pytest** + **Docker** + **GitHub Actions**       | Tests unitarios F.I.R.S.T. en `:memory:`, contenedor reproducible y ejecución Cloud a **\$0/mes**.      |
+| Comando | Propósito | Ejemplo de Uso |
+| :--- | :--- | :--- |
+| **`scan`** | Escaneo concurrente multi-worker, filtrado y sincronización con Obsidian Vault. | `python cli.py scan --portal linkedin,getonbrd --workers 4 --limit 15 --vault-dir vault` |
+| **`sync`** | Reconstruye el grafo en Obsidian (`--target obsidian`) o sincroniza con Notion (`--target notion`). | `python cli.py sync --target obsidian --vault-dir vault` |
+| **`auth`** | Abre el navegador visible para iniciar sesión manual y exportar cookies (`storage_state.json`). | `python cli.py auth --portal linkedin` |
+| **`export`** | Exporta el histórico de postulaciones desde SQLite a `json` o `csv`. | `python cli.py export --format json --output exports/jobs.json` |
 
 ---
 
-## 4. Estructura del Proyecto
+## 4. Estructura Real del Proyecto
 
 ```text
 jobOS-bot/
-├── cli.py                                  # Punto de entrada único CLI
-├── requirements.txt                        # 8 dependencias de producción + pytest
-├── pyproject.toml                          # Configuración de pytest y tipado
-├── Dockerfile                              # Contenedor oficial Playwright Python
-├── docker-compose.yml                      # Ejecución aislada con volúmenes persistentes
-├── .env.example                            # Plantilla pública de variables de entorno
-├── .gitignore                              # Bloqueo estricto de datos privados y sesiones
-├── .github/workflows/
-│   ├── ci.yml                              # Ejecuta pytest en cada push
-│   └── scheduled_scan.yml                  # Corre el bot gratis ($0) con el PC apagado
+├── cli.py                                      # CLI (Click + Rich) con los 4 comandos: scan, sync, auth, export
+├── requirements.txt                            # Dependencias de producción, mypy y pytest
+├── pyproject.toml                              # Configuración de proyecto v2.0, pytest y mypy --strict
+├── Dockerfile                                  # Imagen oficial Playwright Python lista para producción
+├── docker-compose.yml                          # Contenedor con volúmenes para data/, vault/ y exports/
+├── .env.example                                # Variables de entorno (DB_PATH, VAULT_PATH, HEADLESS, NOTION_*)
 ├── config/
-│   ├── filters.yaml                        # Whitelists, blacklists y pesos de Match % (>= 40%)
-│   ├── profile.example.yaml                # Plantilla pública de perfil del candidato
-│   └── cv_base.example.md                  # Plantilla pública de CV base en Markdown
+│   ├── filters.yaml                            # Reglas declarativas, tech_keywords y pesos de scoring
+│   ├── profile.example.yaml                    # Plantilla de perfil del candidato
+│   └── cv_base.example.md                      # Plantilla de CV base en Markdown
 ├── docs/
-│   ├── arquitectura/                       # 11 documentos de arquitectura, patrones y Gitflow
-│   ├── logica-negocio/                     # 5 documentos de reglas de negocio y scoring
-│   └── base-de-datos/                      # 3 documentos de modelo 3FN, DDL y normalización
+│   ├── arquitectura/                           # Arquitectura v2.0 (11-redefinicion-cqs-obsidian-multiworker.md)
+│   ├── logica-negocio/                         # Reglas de scoring, deduplicación y flujo Click-and-Apply
+│   └── base-de-datos/                          # Modelo 3FN, índices B-Tree compuestos y normalización
 ├── src/
-│   ├── config_loader.py                    # Cargador tipado de YAML y variables de entorno
-│   ├── domain/                             # NÚCLEO PURO (0% I/O, 0% Red)
-│   │   ├── models.py                       # @dataclass(frozen=True, slots=True), StrEnum
-│   │   ├── text_normalizer.py              # Limpieza Unicode NFD, URL canónica y dedup_key
-│   │   ├── matcher.py                      # Evaluación Hard Rejects y cálculo Match %
-│   │   └── qa_engine.py                    # RapidFuzz (>= 85%) y reglas COP vs USD
-│   ├── adapters/                           # INFRAESTRUCTURA (Puertos Externos)
-│   │   ├── db/
-│   │   │   ├── schema.sql                  # DDL 3FN (4 tablas + índices + PRAGMA WAL)
-│   │   │   └── repository.py               # SQL parametrizado + transacción times_applied + 1
-│   │   ├── scrapers/
-│   │   │   ├── base.py                     # BasePortalScraper (Template Method DRY)
-│   │   │   ├── browser.py                  # Contexto Dual (Local visible / Cloud headless)
-│   │   │   ├── orchestrator.py             # Ejecutor single-thread con graceful degradation
-│   │   │   ├── linkedin.py                 # Adaptador LinkedIn Jobs
-│   │   │   ├── getonbrd.py                 # Adaptador GetOnBrd
-│   │   │   ├── computrabajo.py             # Adaptador Computrabajo Colombia
-│   │   │   ├── elempleo.py                 # Adaptador Elempleo.com
-│   │   │   ├── glassdoor.py                # Adaptador Glassdoor
-│   │   │   └── indeed.py                   # Adaptador Indeed Colombia
-│   │   ├── ai/
-│   │   │   └── gemini_client.py            # Cliente Gemini 2.5 Flash con caché en SQLite
-│   │   ├── notion/
-│   │   │   └── notion_client.py            # Cliente HTTPX (Push, Pull y Bootstrap Multi-PC)
-│   │   └── mcp/
-│   │       └── server.py                   # Servidor MCP nativo (stdio) con 5 herramientas
-│   ├── services/                           # CASOS DE USO
-│   │   ├── scan_service.py                 # Escanear -> Evaluar % -> Postular/Re-postular
-│   │   ├── assist_service.py               # Autocompletar formulario -> Pausar antes de Submit
-│   │   └── career_service.py               # Stats, Tailor CV, Prep Entrevista, Sync y Follow-ups
-│   └── ui/
-│       └── console.py                      # Tablas y paneles Rich
-└── tests/                                  # SUITE F.I.R.S.T. (Pytest en :memory:)
-    ├── test_text_normalizer.py
+│   ├── config_loader.py                        # Cargador tipado de YAML y configuración de entorno
+│   ├── domain/                                 # CAPA DE DOMINIO PURO (0% I/O)
+│   │   ├── models.py                           # Dataclasses inmutables (JobOffer, ApplicationRecord, etc.)
+│   │   ├── text_normalizer.py                  # Normalización Unicode NFD, URLs canónicas y dedup_key
+│   │   ├── tech_tokenizer.py                   # Tokenizador O(n) con diccionario hash de alias tecnológicos
+│   │   ├── bayesian_scorer.py                  # Suavizado bayesiano con prior p_0 e IDF por tecnología
+│   │   ├── fuzzy_matcher.py                    # Cascada O(1) -> Regex Slots -> RapidFuzz (>= 85%)
+│   │   ├── graph_analyzer.py                   # Co-ocurrencia Skill-to-Skill y priorización de brechas
+│   │   └── matcher.py                          # Evaluación de Hard Rejects en título y Match % (>= 40%)
+│   ├── ports/                                  # CAPA DE PUERTOS (Interfaces Abstractas ABC)
+│   │   ├── repository_port.py                  # ApplicationRepositoryPort
+│   │   ├── scraper_port.py                     # PortalScraperPort
+│   │   ├── vault_port.py                       # KnowledgeVaultPort
+│   │   └── external_sync_port.py               # ExternalSyncPort
+│   ├── application/                            # CAPA DE APLICACIÓN (Patrón CQS)
+│   │   ├── commands/                           # ScanPortalsCommand, SyncVaultCommand, SyncExternalCommand
+│   │   ├── queries/                            # GetApplicationsQuery, GetApplicationByIdQuery
+│   │   └── handlers/                           # Handlers desacoplados para cada Command y Query
+│   └── adapters/                               # CAPA DE ADAPTADORES (Infraestructura Concreta)
+│       ├── db/
+│       │   ├── schema.sql                      # DDL 3FN + índice B-Tree compuesto (company_norm, title_norm)
+│       │   └── repository.py                   # SQLiteApplicationRepository (UPSERT + Blocking difuso)
+│       ├── obsidian/
+│       │   ├── adapter.py                      # ObsidianVaultAdapter (generación del grafo local)
+│       │   ├── frontmatter.py                  # Serializador YAML frontmatter
+│       │   ├── wikilinks.py                    # Generador de enlaces [[Wikilinks]]
+│       │   └── hubs.py                         # Creador de nodos hub (companies, skills, portals, status)
+│       ├── scrapers/
+│       │   ├── orchestrator.py                 # MultiWorkerScraperOrchestrator (ThreadPoolExecutor)
+│       │   ├── base.py                         # BasePortalScraper (Template Method)
+│       │   ├── browser.py                      # Gestión de contextos Playwright aislados por worker
+│       │   ├── linkedin.py                     # Scraper LinkedIn Jobs
+│       │   ├── getonbrd.py                     # Scraper GetOnBrd
+│       │   ├── computrabajo.py                 # Scraper Computrabajo
+│       │   ├── elempleo.py                     # Scraper Elempleo
+│       │   ├── glassdoor.py                    # Scraper Glassdoor
+│       │   └── indeed.py                       # Scraper Indeed
+│       ├── mcp/
+│       │   └── server.py                       # Servidor MCP On-Demand (3 tools conectadas a CQS)
+│       └── notion/
+│           └── notion_client.py                # NotionSyncAdapter (ExternalSyncPort secundario)
+└── tests/                                      # SUITE DETERMINISTA F.I.R.S.T. (Pytest + mypy --strict)
+    ├── test_v2_architecture.py
+    ├── test_cli.py
+    ├── test_mcp_server.py
     ├── test_matcher.py
     ├── test_repository.py
-    └── test_qa_engine.py
+    ├── test_scrapers.py
+    ├── test_text_normalizer.py
+    └── test_notion_client.py
 ```
 
 ---
 
-## 5. Instalación y Puesta en Marcha
+## 5. Inicio Rápido y Configuración MCP
 
-### Prerrequisitos
-
-- **Python 3.11+** ([python.org](https://www.python.org/downloads/))
-- **Git**
-- _(Opcional)_ **Docker & Docker Compose** para ejecución aislada en contenedores.
-
----
-
-### Instalación Local (Recomendada para uso interactivo)
-
-#### 1. Clonar el repositorio
-
+### Instalación Local
 ```bash
-git clone https://github.com/tu-usuario/jobOS-bot.git
-cd jobOS-bot
-```
-
-#### 2. Crear y activar el entorno virtual (`.venv`)
-
-En **Windows (PowerShell)**:
-
-```powershell
 python -m venv .venv
-.venv\Scripts\Activate.ps1
-```
-
-En **Linux / macOS**:
-
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-```
-
-#### 3. Instalar las dependencias de Python
-
-```bash
-pip install --upgrade pip
+source .venv/bin/activate  # En Windows: .venv\Scripts\activate
 pip install -r requirements.txt
-```
-
-#### 4. Instalar los binarios de Playwright
-
-Playwright requiere instalar los navegadores de automatización (Chromium):
-
-```bash
 playwright install chromium
-```
-
-#### 5. Configurar variables de entorno y datos personales
-
-Crea tu archivo local `.env` a partir de la plantilla pública:
-
-```bash
-# Linux / macOS
 cp .env.example .env
-
-# Windows (PowerShell)
-Copy-Item .env.example .env
 ```
 
-Edita `.env` con tus credenciales y configuración deseada:
-
-- `GEMINI_API_KEY`: API Key gratuita de [Google AI Studio](https://aistudio.google.com/apikey).
-- `NOTION_TOKEN` y `NOTION_DATABASE_ID`: Credenciales de integración con Notion (opcional para dashboard remoto).
-- `HEADLESS`: Déjalo en `false` para ver el navegador interactivo en tu PC local (`true` para modo desatendido o Docker).
-- `DB_PATH`: Ruta a la base de datos SQLite local (`data/jobs.db`).
-
-> [!NOTE]
-> Al configurar tu perfil de búsqueda y tu hoja de vida, podrás personalizar `config/profile.yaml` y `config/cv_base.md` a partir de sus respectivas plantillas en `config/`.
-
-#### 6. Verificar la instalación
-
-Ejecuta la suite de pruebas unitarias para confirmar que todo funciona correctamente:
-
-```bash
-pytest -v
-```
-
----
-
-### Opción Alternativa: Instalación con Docker
-
-Si prefieres ejecutar el bot en un contenedor sin instalar Python ni Playwright en tu máquina host:
-
-```bash
-# 1. Configurar variables de entorno
-cp .env.example .env
-
-# 2. Construir la imagen del contenedor
-docker compose build
-
-# 3. Validar la instalación ejecutando los tests dentro del contenedor
-docker compose run --rm jobos pytest -v
-```
-
----
-
-## 6. Guía de Uso Rápido (CLI & MCP)
-
-> [!TIP]
-> Consulta la [**Guía Completa de Comandos y Flujo End-to-End (`docs/GUIA_COMANDOS_Y_FLUJOS.md`)**](./docs/GUIA_COMANDOS_Y_FLUJOS.md) para ver diagramas del ciclo de vida de una vacante, ejemplos avanzados, escaneo diario desatendido y resolución de problemas.
-
-### Comandos de Terminal (`cli.py`)
-
-```powershell
-# 1. Iniciar sesión en los portales y exportar cookies para modo Cloud (storage_state.json)
-python cli.py auth
-
-# 2. Escanear secuencialmente todos los portales o una lista específica
-python cli.py scan --portal all
-python cli.py scan --portal linkedin,getonbrd
-
-# 3. Postulación asistida (por ID único, múltiples IDs en lote, cola o URL directa)
-python cli.py assist 3                     # Asiste la vacante #3 registrada en SQLite
-python cli.py assist 1 3 5                 # Encola y asiste las vacantes #1, #3 y #5 en lote
-python cli.py assist --min-score 70 --top 5 # Encola las mejores 5 vacantes pendientes con Match >= 70%
-python cli.py assist                       # Muestra tabla interactiva de vacantes prioritarias pendientes
-python cli.py assist <url>                 # Asiste un formulario pegando la URL directamente
-
-# 4. Ver el radar estadístico de tecnologías más pedidas en las vacantes reales
-python cli.py stats
-
-# 5. Sugerir ajustes al CV según la oferta guardada
-python cli.py tailor <job_id>
-
-# 6. Generar guía de estudio técnico para entrevista (React, Node.js, NestJS, PostgreSQL)
-python cli.py prep <job_id>
-
-# 7. Sincronizar con Notion (Push nuevas, Pull estados, Bootstrap en otro PC y Follow-ups +7d)
-python cli.py sync
-
-# 8. Exportar historial a CSV
-python cli.py export
-
-# 9. Ejecutar pruebas unitarias deterministas
-pytest -v
-```
-
-### Conexión como Servidor MCP (En cualquier PC)
-
-Agrega este bloque en tu cliente MCP (`mcp_config.json` / `claude_desktop_config.json`):
-
+### Configuración del Servidor MCP On-Demand (`claude_desktop_config.json` / `mcp_config.json`)
 ```json
 {
-    "mcpServers": {
-        "jobos-bot": {
-            "command": "python",
-            "args": ["-m", "src.adapters.mcp.server"],
-            "cwd": "C:/Users/alejandro/developer/jobOS-bot"
-        }
+  "mcpServers": {
+    "jobos-bot": {
+      "command": "python",
+      "args": ["-m", "src.adapters.mcp.server"],
+      "cwd": "/ruta/absoluta/a/jobOS-bot"
     }
+  }
 }
 ```
 
+### Ejecución de Tests y Verificación de Tipado Estricto
+```bash
+pytest -v
+mypy --strict src cli.py tests
+```
+
 ---
 
-## 7. Índice Completo de Documentación Técnica (`docs/`)
+## 6. Documentación Técnica (`docs/`)
 
-### I. Arquitectura e Ingeniería ([`docs/arquitectura/`](./docs/arquitectura/README.md))
-
-- [**00. Visión, Stack y Límites de Alcance**](./docs/arquitectura/00-vision-y-alcance.md)
-- [**01. Motor de Scraping Multi-Portal Secuencial**](./docs/arquitectura/01-scrapers-multiportal.md)
-- [**02. Modelo de Datos, Filtrado y Deduplicación**](./docs/arquitectura/02-filtrado-datos-y-deduplicacion.md)
-- [**03. Copiloto de Autocompletado e IA Quirúrgica**](./docs/arquitectura/03-copiloto-ia-y-autocompletado.md)
-- [**04. Sincronización con Notion y Seguimiento**](./docs/arquitectura/04-sincronizacion-notion-y-followups.md)
-- [**05. Despliegue Híbrido (\$0/mes), Docker y Privacidad**](./docs/arquitectura/05-despliegue-hibrido-y-seguridad.md)
-- [**06. Tipo de Arquitectura, Árbol de Módulos, Clean Code y Plan de Pruebas**](./docs/arquitectura/06-estructura-clean-code-y-plan.md)
-- [**07. Catálogo de Patrones de Arquitectura y de Diseño**](./docs/arquitectura/07-patrones-diseno-y-arquitectura.md)
-- [**08. Servidor MCP Nativo y Sincronización Multi-PC**](./docs/arquitectura/08-servidor-mcp.md)
-- [**09. Catálogo Completo del Stack Tecnológico y Dependencias**](./docs/arquitectura/09-stack-tecnologico-y-dependencias.md)
-- [**10. Flujo de Trabajo Gitflow y Convenciones de Commits**](./docs/arquitectura/10-gitflow-y-convenciones.md)
-
-### II. Lógica de Negocio ([`docs/logica-negocio/`](./docs/logica-negocio/README.md))
-
-- [**01. Motor de Scoring (%) y Postulación Flexible (`>= 40%`)**](./docs/logica-negocio/01-motor-scoring-y-umbrales.md)
-- [**02. Ciclo de Postulación, Re-Postulación y Contador Único (`times_applied`)**](./docs/logica-negocio/02-ciclo-postulacion-y-repostulacion.md)
-- [**03. Reglas de Respuesta en Formularios y Filtros ATS**](./docs/logica-negocio/03-reglas-respuestas-y-formularios.md)
-- [**04. Máquina de Estados, Follow-ups y Entrevistas**](./docs/logica-negocio/04-estados-seguimiento-y-entrevistas.md)
-- [**05. Estrategia de Hoja de Vida y Optimización ATS**](./docs/logica-negocio/05-adaptacion-cv-y-estrategia-ats.md)
-
-### III. Base de Datos y Normalización ([`docs/base-de-datos/`](./docs/base-de-datos/README.md))
-
-- [**01. Modelo Entidad-Relación y Formas Normales (1FN, 2FN, 3FN)**](./docs/base-de-datos/01-modelo-relacional-y-formas-normales.md)
-- [**02. Diccionario de Datos, Índices y Esquema DDL (`schema.sql`)**](./docs/base-de-datos/02-diccionario-datos-y-ddl-sql.md)
-- [**03. Normalización Léxica, URLs Canónicas y Claves (`text_normalizer.py`)**](./docs/base-de-datos/03-normalizacion-lexica-y-claves-deduplicacion.md)
-
-### IV. Manual de Operaciones y Flujos
-- [**Guía Definitiva de Comandos y Flujo de Trabajo**](./docs/GUIA_COMANDOS_Y_FLUJOS.md): Manual operativo paso a paso de cada comando, parámetros, estados de vacante y FAQ.
-
-### V. Planificación y Reglas de Agente
-
-- [**PLAN.md**](./PLAN.md): Hoja de ruta ejecutable paso a paso dividida en 6 bloques verificables.
-- [**CLAUDE.md**](./CLAUDE.md): Reglas estrictas de arquitectura, convenciones y trampas conocidas.
+* **Documento Maestro v2.0:** [**11. Redefinición Arquitectónica v2.0: Clean Architecture, CQS, Multi-Worker, Grafo en Obsidian y Activación On-Demand via MCP**](./docs/arquitectura/11-redefinicion-cqs-obsidian-multiworker.md)
+* [**Índice de Arquitectura (`docs/arquitectura/`)**](./docs/arquitectura/README.md)
+* [**Índice de Lógica de Negocio (`docs/logica-negocio/`)**](./docs/logica-negocio/README.md)
+* [**Índice de Base de Datos y Normalización (`docs/base-de-datos/`)**](./docs/base-de-datos/README.md)
+* [**Guía de Convenciones para Agentes (`CLAUDE.md`)**](./CLAUDE.md)

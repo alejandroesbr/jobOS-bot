@@ -1,57 +1,72 @@
-# jobOS-bot
+# jobOS-bot v2.0
 
-Copiloto local en Windows 11 (**100% Python** + Playwright + SQLite + Gemini + Notion + Rich) para escanear múltiples portales de empleo de forma secuencial (*single-thread*), filtrar vacantes Junior/Remoto/Barranquilla, asistir el autocompletado de formularios y preparar entrevistas técnicas (React, Node.js, NestJS, PostgreSQL). Diseñado para uso personal diario y como proyecto de ingeniería de software para portafolio.
+Motor concurrente de inteligencia laboral (**100% Python 3.11+** + Playwright Multi-Worker + SQLite 3FN + Obsidian Graph Vault / Graphify + Servidor MCP On-Demand) diseñado bajo **Clean Architecture**, **Ports & Adapters** y **CQS (Command Query Separation)**.
 
-## Commands
-```powershell
-python cli.py auth                            # Abre navegador para loguearse y exporta data/storage_state.json
-python cli.py scan --portal all               # Escanea secuencialmente todos los portales habilitados
-python cli.py scan --portal linkedin,getonbrd # Escanea portales específicos (single-thread)
-python cli.py assist <id1> [id2 ...]          # Encola y asiste vacantes por ID o URL (memoria local + Gemini)
-python cli.py stats                           # Ranking en consola (Rich) de tecnologías más pedidas
-python cli.py tailor <job_id>                 # Sugiere ajustes al CV según la descripción del cargo
-python cli.py cv <id1> [id2 ...]              # Genera cvs/<id>_<empresa>_<cargo>.pdf con el CV adaptado (no postula)
-python cli.py cv --all --min-score 60         # CV adaptado para todas las vacantes pendientes compatibles
-python cli.py prep <job_id>                   # Genera guía de entrevista en interviews/<empresa>.md
-python cli.py sync                            # Sincroniza estados con Notion y marca follow-ups (+7 días)
-python cli.py export                          # Exporta tabla applications a CSV
-pytest                                        # Ejecuta la suite de tests unitarios (filtros, matcher, parsers)
-docker compose run --rm jobos scan --portal all # Ejecución contenedorizada (Docker)
+---
+
+## 1. Comandos Nucleares de CLI (`cli.py`)
+
+```bash
+# 1. Escaneo Multi-Worker concurrente y sincronización con el Vault de Obsidian
+python cli.py scan --portal all --workers 4 --limit 15 --vault-dir vault
+python cli.py scan --portal linkedin,getonbrd --workers 2 --vault-dir vault
+
+# 2. Sincronización de grafo local (Obsidian por defecto) o destino secundario (Notion)
+python cli.py sync --target obsidian --vault-dir vault
+python cli.py sync --target notion
+
+# 3. Autenticación interactiva para persistir sesiones/cookies anti-detección
+python cli.py auth
+python cli.py auth --portal glassdoor
+
+# 4. Exportación de registros desde SQLite a JSON o CSV
+python cli.py export --format json --output exports/applications.json
+python cli.py export --format csv --output exports/applications.csv
+
+# 5. Verificación de calidad y tipado estricto
+pytest -v
+mypy --strict src cli.py tests
 ```
 
-## Architecture
-- `cli.py`: Único punto de entrada por línea de comandos con salida formateada en `Rich`.
-- `src/models.py`: Modelos de datos tipados (`dataclasses`) para ofertas normalizadas (`JobOffer`), resultados de filtrado y respuestas de formulario.
-- `src/db.py` + `src/schema.sql`: Capa SQLite (`data/jobs.db`) con 3 tablas (`applications`, `qa_memory`, `keyword_stats`) y deduplicación inter-portal. Sin ORM.
-- `src/scrapers/`: Arquitectura basada en el patrón **Adapter/Strategy** (`base.py` con `BasePortalScraper`) ejecutada en **un solo hilo secuencial**:
-  - `linkedin.py` (LinkedIn Jobs)
-  - `getonbrd.py` (GetOnBrd)
-  - `computrabajo.py` y `elempleo.py` (Mercado local Colombia)
-  - `glassdoor.py` e `indeed.py` (Portales globales)
-- `src/matcher.py`: Filtro Regex declarativo (`config/filters.yaml`), deduplicación y similitud Levenshtein (`rapidfuzz`, umbral `>= 85%`).
-- `src/ai.py` y `src/notion.py`: Clientes ligeros para `gemini-3.8-flash` (con cascada de fallback) y Notion API.
-- `tests/`: Pruebas unitarias deterministas con `pytest` (sin red ni navegador) para demostrar calidad de código en el portafolio.
+---
 
-## Conventions
-- **100% Python con tipado estricto:** Usar type hints estándar de Python 3.11+ (`list[str]`, `str | None`, `dataclass`) en todas las funciones y módulos.
-- **Postulación por Rango de % (No exige 100% de requisitos):** Si una oferta no tiene un *Hard Reject* (ej. Senior/+5 años) y alcanza el umbral mínimo de compatibilidad (`match_score >= 40%`), el bot envía la hoja de vida y postula aunque falten requisitos secundarios.
-- **Re-postulación con Registro Único (`times_applied`):** Cuando vuelve a encontrar la misma oferta (en otro portal o republicada tras el cooldown), vuelve a postularse pero **nunca duplica la fila** en SQLite ni en Notion; hace `UPSERT` por `dedup_key` incrementando `times_applied = times_applied + 1` y anexando el envío a `submission_history`.
-- **SQLite es la única fuente de verdad:** Notion es solo un espejo visual sincronizado bajo demanda con `python cli.py sync`.
-- **Ejecución Single-Thread Multi-Portal:** Todos los scrapers comparten la misma sesión persistente de Playwright (`./data/browser_profile`, `headless=False`) y se ejecutan uno tras otro con aislamiento de errores (*graceful degradation*).
-- **Configuración declarativa:** Toda regla de filtrado o dato personal vive en `config/filters.yaml`, `config/profile.yaml` y `config/cv_base.md`, nunca quemada en el código.
-- **Caché de IA obligatorio:** Nunca llamar a Gemini dos veces para el mismo `job_id` o la misma pregunta normalizada en `qa_memory`.
+## 2. Arquitectura Limpia + CQS + Ports & Adapters
 
-## Traps
-- **Detección anti-bot y Modo Dual (Local vs. Cloud):** En local usar `headless=False` con `./data/browser_profile`. Cuando corra con el PC apagado (GitHub Actions / Docker), usar `HEADLESS=true` inyectando `storage_state.json` y manteniendo siempre ejecución **single-thread secuencial** con pausas aleatorias (`2.5s` a `6.0s`).
-- **Selectores rotos en un portal:** Si un portal cambia su DOM o pide captcha, el scraper de ese portal debe capturar la excepción, reportar el aviso en `Rich` y permitir que el orquestador continúe con el siguiente portal.
-- **Ruido en keywords:** No usar TF-IDF abierto sobre texto libre; contar coincidencias únicamente contra la lista cerrada `tech_keywords` de `config/filters.yaml`.
-- **CV adaptado sin inventar:** `cv` solo reordena habilidades y proyectos de `config/cv_base.md` según las keywords de la oferta; el resumen reescrito por Gemini se descarta si menciona tecnologías o cifras que no estén en el CV base.
-- **HTML sucio a LLMs:** Extraer solo `inner_text()` del contenedor de la descripción (máx. 4,000 caracteres) antes de enviarlo a Gemini.
+- **`cli.py`**: Entrypoint de línea de comandos (`Click` + `Rich`) que despacha exclusivamente los 4 comandos nucleares (`scan`, `sync`, `auth`, `export`) hacia los handlers de aplicación.
+- **`src/domain/`** (Núcleo Puro, `0% I/O`):
+  - `models.py`: Entidades y Value Objects inmutables (`@dataclass(frozen=True, slots=True)`, `StrEnum`).
+  - `text_normalizer.py`: Normalización Unicode NFD, URLs canónicas, slugs y claves `dedup_key`.
+  - `tech_tokenizer.py`: `TechTokenizer` — Lexer/tokenizador en $O(n)$ con diccionario hash de alias (`js` -> `JavaScript`, `c#` -> `CSharp`, `.net` -> `DotNet`) y soporte para símbolos `#+.-` sin falsos positivos de `\b`.
+  - `fuzzy_matcher.py`: `FuzzyCascadeMatcher` — Cascada en 3 niveles: Hash Exacto $O(1)$ -> Plantilla Regex con slots $O(L)$ -> `RapidFuzz` con corte temprano (`score_cutoff >= 85%`).
+  - `bayesian_scorer.py`: `BayesianScorer` — Suavizado bayesiano con prior $p_0$, peso de evidencia $\alpha$ y ponderación por rareza $IDF(t) = \log(N / (1 + df_t))$.
+  - `graph_analyzer.py`: `GraphAnalyzer` — Proyección unipartita Skill-to-Skill de co-ocurrencia, detección de comunidades y matriz de priorización de brechas técnicas $\text{Prioridad}(s) = \text{Demanda}(s) \times (1 - \text{Dominio}(s))$.
+  - `matcher.py`: `OfferMatcher` — Evalúa *Hard Rejects* únicamente sobre el título del cargo y calcula compatibilidad ponderada (`match_score >= 40%`).
+- **`src/ports/`** (Contratos Abstractos):
+  - `repository_port.py`: `ApplicationRepositoryPort`
+  - `scraper_port.py`: `PortalScraperPort`
+  - `vault_port.py`: `KnowledgeVaultPort`
+  - `external_sync_port.py`: `ExternalSyncPort`
+- **`src/application/`** (Patrón CQS — Command Query Separation):
+  - **`commands/`**: `ScanPortalsCommand` (`scan_portals.py`), `SyncVaultCommand` (`sync_vault.py`), `SyncExternalCommand` (`sync_external.py`).
+  - **`queries/`**: `GetApplicationsQuery` (`get_applications.py`), `GetApplicationByIdQuery` (`get_application_by_id.py`).
+  - **`handlers/`**: `ScanPortalsHandler`, `SyncVaultHandler`, `SyncExternalHandler`, `GetApplicationsHandler`, `GetApplicationByIdHandler`.
+- **`src/adapters/`** (Infraestructura Concreta):
+  - **`obsidian/`**: `ObsidianVaultAdapter` (`adapter.py`, `frontmatter.py`, `wikilinks.py`, `hubs.py`) — Genera notas Markdown con YAML frontmatter y enlaces bidireccionales `[[Wikilinks]]` hacia hubs en `companies/`, `skills/`, `portals/` y `status/` para visualización en **Obsidian + Graphify**.
+  - **`scrapers/`**: `MultiWorkerScraperOrchestrator` (`orchestrator.py`) con `ThreadPoolExecutor` y contextos Playwright aislados por worker sobre `linkedin.py`, `getonbrd.py`, `computrabajo.py`, `elempleo.py`, `glassdoor.py` e `indeed.py`.
+  - **`db/`**: `SQLiteApplicationRepository` (`repository.py` + `schema.sql`) — Persistencia en 3FN con WAL, índice B-Tree compuesto `(company_norm, title_norm)`, *blocking* por empresa (`token_sort_ratio >= 85%`) y `UPSERT` atómico (`times_applied = times_applied + 1`).
+  - **`mcp/`**: Servidor MCP On-Demand (`server.py`, Zero-Daemon via `stdio`) que expone 3 herramientas:
+    1. `run_portal_scan_and_sync`: Ejecuta `ScanPortalsCommand` en paralelo y actualiza el Vault de Obsidian.
+    2. `query_job_applications`: Ejecuta `GetApplicationsQuery` con filtros analíticos (`status`, `min_score`, `portal`, `limit`).
+    3. `sync_obsidian_vault`: Ejecuta `SyncVaultCommand` para reconstruir el grafo completo en `vault/`.
+  - **`notion/`**: `NotionSyncAdapter` (`notion_client.py`) — Adaptador secundario opcional (`ExternalSyncPort`).
 
-## Rules
-- Never enviar un formulario automáticamente (`submit`); `assist` llena el formulario y se detiene para que el usuario revise y haga clic final. `autopilot` solo escanea y sincroniza, nunca postula.
-- El comando `scan` descubre y registra vacantes compatibles en estado 'Pendiente' con `times_applied=0`. Solo cuando el usuario confirma en la terminal que envió la postulación (vía `assist`), transiciona a 'Enviado' con `times_applied` incrementado.
-- Never usar multithreading/multiprocessing para escaneo web ni crear demonios 24/7 en segundo plano, ORMs o UIs web propias.
-- Never subir al repositorio `.env`, `data/`, `config/profile.yaml`, `config/cv_base.md`, `*.pdf`, `cvs/`, `interviews/` ni `followups/`.
-- Always mantener los tests unitarios en `tests/` pasando al modificar `matcher.py`, `db.py` o normalizadores.
-- Always actualizar `PLAN.md` al completar cada paso.
+---
+
+## 3. Convenciones y Reglas Estrictas
+
+- **Tipado Estricto (`mypy --strict`)**: Todo el código en `src/`, `cli.py` y `tests/` debe pasar `mypy --strict` con cero errores.
+- **Separación CQS Pura**: Los *Commands* mutan estado (SQLite / Obsidian Vault) y devuelven resultados de ejecución; las *Queries* son lecturas puras e idempotentes sin efectos secundarios.
+- **Zero-Daemon On-Demand**: El sistema no ejecuta demonios 24/7 en segundo plano; despierta bajo demanda vía MCP (`stdio`) o invocación puntual en CLI.
+- **Click-and-Apply desde Obsidian**: No se inyectan scripts en formularios DOM de terceros; cada nota de vacante en `vault/applications/` incluye la URL canónica limpia y el análisis de brechas técnicas para postulación directa.
+- **Hard Rejects Solo en el Título**: Las palabras clave de exclusión (*Senior*, *Lead*, *Staff*, *Architect*) se evalúan únicamente sobre el título de la oferta para evitar falsos descartes en el cuerpo de la descripción.
+- **Privacidad**: Nunca subir al repositorio `.env`, `data/`, `vault/`, `exports/`, `config/profile.yaml` ni `config/cv_base.md`.

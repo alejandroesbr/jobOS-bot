@@ -1,16 +1,11 @@
-import hashlib
 import re
 import unicodedata
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
+from src.domain.models import WorkModality
+
 COMPANY_SUFFIX_PATTERN = re.compile(
     r"\b(?:s\.?a\.?s\.?|s\.?a\.?|ltda\.?|inc\.?|llc\.?|corp\.?|corporation|b\.?v\.?|gmbh|colombia|latam)\b",
-    re.IGNORECASE,
-)
-
-# Empresas ocultas por el portal: el nombre no identifica la vacante, así que no sirve para deduplicar.
-ANONYMOUS_COMPANY_PATTERN = re.compile(
-    r"\b(?:confidencial|confidential|anonima|anonimo|anonymous|reservad[ao]|importante\s+empresa)\b",
     re.IGNORECASE,
 )
 
@@ -19,12 +14,6 @@ TITLE_NOISE_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
-QUESTION_NOISE_PATTERN = re.compile(
-    r"\((?:obligatorio|required|opcional|optional)\)",
-    re.IGNORECASE,
-)
-
-NON_ALPHANUMERIC_PATTERN = re.compile(r"[^a-z0-9.\s]+")
 WHITESPACE_PATTERN = re.compile(r"\s+")
 
 TITLE_SYNONYMS: tuple[tuple[re.Pattern[str], str], ...] = (
@@ -56,20 +45,12 @@ def collapse_whitespace(text: str) -> str:
 
 
 def normalize_company_name(raw_company: str) -> str:
-    if not raw_company or not raw_company.strip():
+    if not raw_company:
         return ""
     ascii_text = strip_accents(raw_company).lower()
-    raw_alphanumeric = re.sub(r"[^a-z0-9\s]+", " ", ascii_text).strip()
-    if not raw_alphanumeric:
-        return ""
-
     without_suffixes = COMPANY_SUFFIX_PATTERN.sub(" ", ascii_text)
     alphanumeric = re.sub(r"[^a-z0-9\s]+", " ", without_suffixes)
-    result = collapse_whitespace(alphanumeric)
-    if not result:
-        # Fallback if legal suffixes were the entire company string (e.g. "S.A.S.")
-        result = collapse_whitespace(raw_alphanumeric)
-    return result
+    return collapse_whitespace(alphanumeric)
 
 
 def normalize_job_title(raw_title: str) -> str:
@@ -83,19 +64,11 @@ def normalize_job_title(raw_title: str) -> str:
     return collapse_whitespace(text)
 
 
-def is_anonymous_company(company: str) -> bool:
-    return bool(ANONYMOUS_COMPANY_PATTERN.search(strip_accents(company).lower()))
-
-
-def build_dedup_key(company: str, title: str, canonical_url: str | None = None) -> str:
+def build_dedup_key(company: str, title: str) -> str:
     company_norm = normalize_company_name(company)
     title_norm = normalize_job_title(title)
     if not company_norm or not title_norm:
         raise ValueError("Both company and title must contain valid alphanumeric characters.")
-    if canonical_url and is_anonymous_company(company):
-        # Dos "Empresa Confidencial" con el mismo cargo suelen ser vacantes distintas: se separan por URL.
-        url_hash = hashlib.sha1(canonical_url.encode("utf-8")).hexdigest()[:10]
-        return f"{company_norm}::{title_norm}::{url_hash}"
     return f"{company_norm}::{title_norm}"
 
 
@@ -125,13 +98,23 @@ def normalize_canonical_url(raw_url: str) -> str:
     return urlunsplit((scheme, netloc, path, query, ""))
 
 
-def normalize_form_question(raw_label: str) -> str:
-    if not raw_label:
-        return ""
-    text = strip_accents(raw_label).lower()
-    text = QUESTION_NOISE_PATTERN.sub(" ", text)
-    for pattern, replacement in TITLE_SYNONYMS:
-        text = pattern.sub(replacement, text)
-    text = NON_ALPHANUMERIC_PATTERN.sub(" ", text).replace(".", " ")
-    return collapse_whitespace(text)
+def detect_modality(text: str) -> WorkModality:
+    cleaned = strip_accents(text).lower()
+    if any(
+        phrase in cleaned
+        for phrase in (
+            "100% presencial",
+            "100 % presencial",
+            "no es remoto",
+            "no remoto",
+            "trabajo presencial",
+        )
+    ):
+        return WorkModality.ONSITE
+    if "hibrid" in cleaned or "hybrid" in cleaned:
+        return WorkModality.HYBRID
+    if "remot" in cleaned or "teletrabaj" in cleaned or "home office" in cleaned:
+        return WorkModality.REMOTE
+    return WorkModality.ONSITE
+
 

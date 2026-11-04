@@ -1,15 +1,11 @@
 from collections.abc import Iterator
 from contextlib import contextmanager
-import json
-import logging
 from pathlib import Path
 import random
 import time
-from typing import Any, cast
+from typing import Any
 
 from playwright.sync_api import Browser, BrowserContext, Page, ViewportSize, sync_playwright
-
-logger = logging.getLogger(__name__)
 
 DEFAULT_USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -51,21 +47,12 @@ def create_browser_session(
                 headless=headless,
                 user_agent=DEFAULT_USER_AGENT,
                 viewport=DEFAULT_VIEWPORT,
-                locale="es-CO",
+                locale="es-419",  # Un solo idioma principal
+                extra_http_headers={"Accept-Language": "es-419,es;q=0.9,en;q=0.8"}, # Aquí pasas ambos idiomas
                 timezone_id="America/Bogota",
-                extra_http_headers={"Accept-Language": "es-CO,es-419;q=0.9,es;q=0.8,en;q=0.7"},
                 args=["--disable-blink-features=AutomationControlled"],
             )
             context.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
-            if state_file and not context.cookies():
-                try:
-                    with open(state_file, "r", encoding="utf-8") as sf:
-                        cookie_data = json.load(sf)
-                        cookies = cookie_data.get("cookies", [])
-                        if cookies:
-                            context.add_cookies(cast(Any, cookies))
-                except Exception as ex:
-                    logger.debug("No se pudieron cargar cookies de storage_state: %s", ex)
             try:
                 yield context
             finally:
@@ -78,9 +65,9 @@ def create_browser_session(
             context_kwargs: dict[str, Any] = {
                 "user_agent": DEFAULT_USER_AGENT,
                 "viewport": DEFAULT_VIEWPORT,
-                "locale": "es-CO",
+                "locale": "es-419", # Un solo idioma principal
+                "extra_http_headers": {"Accept-Language": "es-419,es;q=0.9,en;q=0.8"}, # Aquí pasas ambos idiomas
                 "timezone_id": "America/Bogota",
-                "extra_http_headers": {"Accept-Language": "es-CO,es-419;q=0.9,es;q=0.8,en;q=0.7"},
             }
             if state_file:
                 context_kwargs["storage_state"] = state_file

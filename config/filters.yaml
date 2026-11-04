@@ -3,7 +3,6 @@ matching:
     min_match_score: 40
     reapply_cooldown_days: 3
     short_description_base_score: 65
-    max_years_experience: 3
 
 candidate_profile:
     skills:
@@ -19,21 +18,16 @@ candidate_profile:
         - SQLAlchemy
         - Sequelize
         - Docker
+        - Docker Compose
+        - Alembic
         - Git
+        - GitHub
         - REST API
+        - JWT
         - Linux
         - Postman
-        - Alembic
-        - JWT
-        - React
-        - NestJS
-        - Next.js
-        - HTML
-        - CSS
-        - Tailwind
-        - Jest
-        - Agile
         - Scrum
+        - Agile
 
 title_blacklist:
     - senior
@@ -73,17 +67,22 @@ title_whitelist:
     - entry level
     - trainee
     - associate
-    - desarrollador
-    - software engineer
-    - backend
+    - desarrollador backend
     - backend developer
-    - full stack
+    - backend
+    - python developer
+    - desarrollador python
+    - node developer
+    - desarrollador node
+    - desarrollador full stack
+    - full stack developer
     - fullstack
-    - frontend
-    - web developer
-    - developer
-    - ingeniero de software
+    - desarrollador junior
+    - software engineer
+    - junior software engineer
     - programador
+    - desarrollador web
+    - web developer
     - ingeniero de desarrollo
     - ingeniero de sistemas
 
@@ -99,12 +98,8 @@ location_whitelist:
     - atlántico
     - colombia
     - latam
-
-# Ofertas presenciales o híbridas solo se aceptan en estas ubicaciones
-onsite_location_whitelist:
-    - barranquilla
-    - atlantico
-    - atlántico
+    - híbrido
+    - hibrido
 
 tech_vocabulary:
     core:
@@ -113,43 +108,42 @@ tech_vocabulary:
             - Python
             - FastAPI
             - Node.js
-            - Express
             - TypeScript
-            - JavaScript
             - PostgreSQL
-            - React
-            - NestJS
+            - SQLAlchemy
+            - Express
+            - REST API
 
     secondary:
         weight: 2
         keywords:
-            - SQL
-            - SQLAlchemy
+            - JavaScript
             - Sequelize
+            - SQL
             - MySQL
             - Docker
+            - Docker Compose
+            - Alembic
             - Git
-            - REST API
-            - Next.js
-            - TypeORM
-            - Tailwind
-            - HTML
-            - CSS
+            - JWT
+            - Linux
+            - Postman
 
     bonus:
         weight: 1
         keywords:
-            - Linux
-            - Alembic
-            - Postman
-            - JWT
-            - AWS
             - Redis
-            - GraphQL
-            - Jest
-            - CI/CD
             - MongoDB
+            - AWS
+            - CI/CD
+            - Next.js
+            - Tailwind
+            - HTML
+            - CSS
             - Scrum
             - Agile
+            - Jest
+            - Pytest
             - Kubernetes
-            - Kafka
+            - Microservices
+            - GraphQL

@@ -1,7 +1,6 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 import logging
-import re
 from typing import TYPE_CHECKING
 
 from playwright.sync_api import Page
@@ -10,6 +9,7 @@ from src.adapters.scrapers.browser import human_delay, smooth_scroll
 from src.config_loader import FilterConfig
 from src.domain.models import JobOffer, PortalName, WorkModality
 from src.domain.text_normalizer import strip_accents
+from src.ports.scraper_port import PortalScraperPort
 
 if TYPE_CHECKING:
     pass
@@ -37,8 +37,6 @@ class RawJobCard:
 
 def detect_modality(text: str) -> WorkModality:
     cleaned = strip_accents(text).lower()
-    if any(neg in cleaned for neg in ["no es remoto", "no remoto", "no-remoto", "100% presencial", "100 % presencial", "totalmente presencial"]):
-        return WorkModality.ONSITE
     if "remot" in cleaned or "teletrabaj" in cleaned or "home office" in cleaned or "100% remoto" in cleaned:
         return WorkModality.REMOTE
     if "hibrid" in cleaned or "hybrid" in cleaned:
@@ -46,11 +44,15 @@ def detect_modality(text: str) -> WorkModality:
     return WorkModality.ONSITE
 
 
-class BasePortalScraper(ABC):
+class BasePortalScraper(PortalScraperPort):
     @property
     @abstractmethod
     def portal(self) -> PortalName:
         ...
+
+    @property
+    def portal_name(self) -> PortalName:
+        return self.portal
 
     @abstractmethod
     def build_search_urls(self, config: FilterConfig) -> list[str]:
@@ -68,13 +70,13 @@ class BasePortalScraper(ABC):
         card_title = strip_accents(card.title).lower()
         for blacklisted in config.title_blacklist:
             blacklisted_norm = strip_accents(blacklisted).lower()
-            if re.search(rf"\b{re.escape(blacklisted_norm)}\b", card_title, re.IGNORECASE):
+            if blacklisted_norm in card_title:
                 return False, f"Title matched blacklist: '{blacklisted}'"
 
         card_company = strip_accents(card.company).lower()
         for blacklisted_comp in config.company_blacklist:
             comp_norm = strip_accents(blacklisted_comp).lower()
-            if comp_norm == card_company or re.search(rf"\b{re.escape(comp_norm)}\b", card_company, re.IGNORECASE):
+            if comp_norm in card_company:
                 return False, f"Company matched blacklist: '{blacklisted_comp}'"
 
         return True, None
@@ -88,8 +90,6 @@ class BasePortalScraper(ABC):
         search_urls = self.build_search_urls(config)
         collected_offers: list[JobOffer] = []
         seen_urls: set[str] = set()
-        pages_loaded = 0
-        cards_found = 0
 
         for search_url in search_urls:
             if len(collected_offers) >= limit:
@@ -97,9 +97,8 @@ class BasePortalScraper(ABC):
 
             try:
                 page.goto(search_url, wait_until="domcontentloaded", timeout=30000)
-                human_delay(2.5, 6.0)
+                human_delay(1.5, 3.0)
                 smooth_scroll(page, steps=2)
-                pages_loaded += 1
             except Exception as ex:
                 logger.warning(f"[{self.portal.value}] Failed loading search page {search_url}: {ex}")
                 continue
@@ -109,7 +108,6 @@ class BasePortalScraper(ABC):
             except Exception as ex:
                 logger.warning(f"[{self.portal.value}] Error extracting cards from {search_url}: {ex}")
                 continue
-            cards_found += len(cards)
 
             for card in cards:
                 if len(collected_offers) >= limit:
@@ -128,7 +126,7 @@ class BasePortalScraper(ABC):
                 # Stage 2: Navigate to detail and extract full description
                 try:
                     description = self.extract_description(page, card.url)
-                    human_delay(2.5, 6.0)
+                    human_delay(1.0, 2.0)
                 except Exception as ex:
                     logger.warning(f"[{self.portal.value}] Failed extracting detail for {card.url}: {ex}")
                     description = ""
@@ -147,13 +145,5 @@ class BasePortalScraper(ABC):
                     external_id=card.external_id,
                 )
                 collected_offers.append(offer)
-
-        if search_urls and pages_loaded == 0:
-            raise PortalScrapeError(self.portal, "No se pudo cargar ninguna página de búsqueda.")
-        if pages_loaded > 0 and cards_found == 0:
-            raise PortalScrapeError(
-                self.portal,
-                "0 vacantes en las páginas de búsqueda: posible cambio de DOM, captcha o sesión expirada.",
-            )
 
         return collected_offers

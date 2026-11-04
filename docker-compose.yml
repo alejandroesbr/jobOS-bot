@@ -4,12 +4,10 @@ services:
     volumes:
       - ./data:/app/data
       - ./config:/app/config:ro
-      - ./interviews:/app/interviews
-      - ./followups:/app/followups
+      - ${OBSIDIAN_VAULT_PATH:-/tmp/jobos-obsidian-vault}:/obsidian_vault
       - ./exports:/app/exports
     environment:
-      - GEMINI_API_KEY=${GEMINI_API_KEY}
       - NOTION_TOKEN=${NOTION_TOKEN}
       - NOTION_DATABASE_ID=${NOTION_DATABASE_ID}
+      - OBSIDIAN_VAULT_PATH=/obsidian_vault
       - HEADLESS=true
-

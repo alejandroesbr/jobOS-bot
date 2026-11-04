@@ -1,14 +1,12 @@
+from dotenv import load_dotenv
 import logging
 import os
-from pathlib import Path
-import re
 from typing import Any
-import uuid
 
 import httpx
 
 from src.adapters.db.repository import ApplicationRepository
-from src.config_loader import TechVocabulary
+from src.config_loader import FilterConfig
 from src.domain.models import (
     ApplicationRecord,
     ApplicationStatus,
@@ -20,124 +18,38 @@ from src.domain.models import (
     WorkModality,
 )
 from src.domain.text_normalizer import build_dedup_key
+from src.ports.external_sync_port import ExternalSyncPort, SyncReport
+from src.ports.repository_port import ApplicationRepositoryPort
 
 logger = logging.getLogger(__name__)
 
 NOTION_API_BASE = "https://api.notion.com/v1"
 NOTION_VERSION = "2022-06-28"
 
-
-def _select_name(props: dict[str, Any], key: str) -> str | None:
-    """Lee el valor de una propiedad select tolerando propiedades ausentes o vacías (select = null)."""
-    select_val = (props.get(key) or {}).get("select") or {}
-    name = select_val.get("name")
-    return str(name) if name else None
-
-
-def clean_notion_id(raw_id: str | None) -> str:
-    if not raw_id:
-        return ""
+def _clean_database_id(raw_id: str) -> str:
     cleaned = raw_id.strip()
-    match = re.search(
-        r"([a-f0-9]{8}-?[a-f0-9]{4}-?[a-f0-9]{4}-?[a-f0-9]{4}-?[a-f0-9]{12})",
-        cleaned,
-        re.IGNORECASE,
-    )
-    if match:
-        hex_val = match.group(1).replace("-", "").lower()
-        return str(uuid.UUID(hex_val))
-    return cleaned
+    if "/" in cleaned:
+        cleaned = cleaned.split("/")[-1]
+    if "?" in cleaned:
+        cleaned = cleaned.split("?")[0]
+    return cleaned.replace("-", "")
 
 
-class NotionClient:
+class NotionClient(ExternalSyncPort):
     def __init__(
         self,
         api_token: str | None = None,
         database_id: str | None = None,
         timeout: float = 15.0,
+        repository: ApplicationRepositoryPort | None = None,
     ) -> None:
-        self.api_token = api_token if api_token is not None else os.getenv("NOTION_TOKEN", "")
-        raw_db_id = database_id if database_id is not None else os.getenv("NOTION_DATABASE_ID", "")
-        self.database_id = clean_notion_id(raw_db_id)
+        load_dotenv()
+        token = api_token if api_token is not None else (os.getenv("NOTION_TOKEN") or os.getenv("NOTION_API_KEY") or "")
+        self.api_token = token.strip()
+        raw_db_id = database_id if database_id is not None else (os.getenv("NOTION_DATABASE_ID") or "")
+        self.database_id = _clean_database_id(raw_db_id)
         self.timeout = timeout
-        self._resolved: bool = False
-
-    def resolve_database_id(self) -> str:
-        """Resolves whether database_id is a database or a page.
-        If it is a page, discovers any child database or creates one automatically.
-        """
-        if not self.is_configured:
-            return ""
-
-        try:
-            with httpx.Client(timeout=self.timeout) as client:
-                db_res = client.get(f"{NOTION_API_BASE}/databases/{self.database_id}", headers=self._headers())
-                if db_res.status_code == 200:
-                    self._resolved = True
-                    return self.database_id
-
-                page_res = client.get(f"{NOTION_API_BASE}/pages/{self.database_id}", headers=self._headers())
-                if page_res.status_code == 200:
-                    blocks_res = client.get(
-                        f"{NOTION_API_BASE}/blocks/{self.database_id}/children", headers=self._headers()
-                    )
-                    if blocks_res.status_code == 200:
-                        blocks = blocks_res.json().get("results", [])
-                        for block in blocks:
-                            if block.get("type") == "child_database":
-                                child_db_id = str(block.get("id"))
-                                logger.info(
-                                    f"Resolved child database '{block.get('child_database', {}).get('title')}' "
-                                    f"({child_db_id}) inside page {self.database_id}"
-                                )
-                                self.database_id = child_db_id
-                                self._persist_db_id_to_env(child_db_id)
-                                self._resolved = True
-                                return child_db_id
-
-                        create_payload = {
-                            "parent": {"type": "page_id", "page_id": self.database_id},
-                            "title": [{"type": "text", "text": {"content": "Pipeline de Empleo"}}],
-                            "properties": {
-                                "Cargo": {"title": {}},
-                                "Empresa": {"rich_text": {}},
-                                "Portal": {"select": {}},
-                                "Estado": {"select": {}},
-                                "Modalidad": {"select": {}},
-                                "Stack Detectado": {"multi_select": {}},
-                                "Match (%)": {"number": {"format": "number"}},
-                                "Veces Postulado": {"number": {"format": "number"}},
-                                "Link Oferta": {"url": {}},
-                                "Último Envío": {"date": {}},
-                            },
-                        }
-                        create_res = client.post(
-                            f"{NOTION_API_BASE}/databases", headers=self._headers(), json=create_payload
-                        )
-                        if create_res.status_code in {200, 201}:
-                            new_db_id = str(create_res.json().get("id"))
-                            logger.info(
-                                f"Created new database 'Pipeline de Empleo' ({new_db_id}) inside page {self.database_id}"
-                            )
-                            self.database_id = new_db_id
-                            self._persist_db_id_to_env(new_db_id)
-                            self._resolved = True
-                            return new_db_id
-        except Exception as ex:
-            logger.warning(f"Error resolving Notion database ID: {ex}")
-
-        self._resolved = True
-        return self.database_id
-
-    def _persist_db_id_to_env(self, new_db_id: str) -> None:
-        try:
-            env_path = Path(".env")
-            if env_path.is_file():
-                content = env_path.read_text(encoding="utf-8")
-                updated = re.sub(r"NOTION_DATABASE_ID=.*", f"NOTION_DATABASE_ID={new_db_id}", content)
-                env_path.write_text(updated, encoding="utf-8")
-        except Exception:
-            pass
+        self.repository = repository
 
     @property
     def is_configured(self) -> bool:
@@ -150,32 +62,9 @@ class NotionClient:
             "Content-Type": "application/json",
         }
 
-    def _query_all_pages(self, client: httpx.Client) -> list[dict[str, Any]] | None:
-        """Consulta todas las páginas de la base de datos siguiendo la paginación de Notion (100 por página)."""
-        pages: list[dict[str, Any]] = []
-        body: dict[str, Any] = {"page_size": 100}
-        while True:
-            res = client.post(
-                f"{NOTION_API_BASE}/databases/{self.database_id}/query",
-                headers=self._headers(),
-                json=body,
-            )
-            if res.status_code != 200:
-                logger.warning(f"Notion query failed (HTTP {res.status_code}): {res.text}")
-                return None
-            data = res.json()
-            pages.extend(data.get("results", []))
-            next_cursor = data.get("next_cursor")
-            if not data.get("has_more") or not next_cursor:
-                return pages
-            body = {"page_size": 100, "start_cursor": next_cursor}
-
     def push_application(self, record: ApplicationRecord) -> str | None:
         if not self.is_configured:
             return None
-
-        if not self._resolved:
-            self.resolve_database_id()
 
         # Build properties payload
         primary_submission = record.submissions[0] if record.submissions else None
@@ -216,18 +105,6 @@ class NotionClient:
                     data = res.json()
                     page_id = str(data.get("id"))
                     return page_id
-                elif res.status_code == 400 and "is a page, not a database" in res.text:
-                    new_id = self.resolve_database_id()
-                    payload["parent"]["database_id"] = new_id
-                    retry_res = client.post(
-                        f"{NOTION_API_BASE}/pages",
-                        headers=self._headers(),
-                        json=payload,
-                    )
-                    if retry_res.status_code in {200, 201}:
-                        return str(retry_res.json().get("id"))
-                    logger.warning(f"Notion push retry failed (HTTP {retry_res.status_code}): {retry_res.text}")
-                    return None
                 else:
                     logger.warning(f"Notion push failed (HTTP {res.status_code}): {res.text}")
                     return None
@@ -264,19 +141,27 @@ class NotionClient:
         if not self.is_configured:
             return []
 
-        if not self._resolved:
-            self.resolve_database_id()
-
         try:
             with httpx.Client(timeout=self.timeout) as client:
-                results = self._query_all_pages(client)
-                if results is None:
+                res = client.post(
+                    f"{NOTION_API_BASE}/databases/{self.database_id}/query",
+                    headers=self._headers(),
+                    json={},
+                )
+                if res.status_code != 200:
+                    logger.warning(f"Notion query failed (HTTP {res.status_code}): {res.text}")
                     return []
 
+                data = res.json()
+                results = data.get("results", [])
                 updates: list[tuple[str, str]] = []
+
                 for page in results:
                     page_id = page.get("id")
-                    status_name = _select_name(page.get("properties", {}), "Estado")
+                    props = page.get("properties", {})
+                    estado_prop = props.get("Estado", {})
+                    select_val = estado_prop.get("select") or {}
+                    status_name = select_val.get("name")
                     if page_id and status_name:
                         updates.append((page_id, status_name))
 
@@ -285,112 +170,138 @@ class NotionClient:
             logger.warning(f"Error pulling status updates from Notion: {ex}")
             return []
 
-    def bootstrap_to_repository(
-        self,
-        repository: ApplicationRepository,
-        vocabulary: TechVocabulary | None = None,
-    ) -> int:
+    def bootstrap_to_repository(self, repository: ApplicationRepositoryPort) -> int:
         if not self.is_configured:
             return 0
 
-        if not self._resolved:
-            self.resolve_database_id()
-
         try:
             with httpx.Client(timeout=self.timeout) as client:
-                pages = self._query_all_pages(client)
+                res = client.post(
+                    f"{NOTION_API_BASE}/databases/{self.database_id}/query",
+                    headers=self._headers(),
+                    json={},
+                )
+                if res.status_code != 200:
+                    return 0
+
+                pages = res.json().get("results", [])
+                restored_count = 0
+
+                for page in pages:
+                    page_id = page.get("id")
+                    props = page.get("properties", {})
+
+                    title_arr = props.get("Cargo", {}).get("title", [])
+                    title = title_arr[0].get("text", {}).get("content", "") if title_arr else ""
+
+                    comp_arr = props.get("Empresa", {}).get("rich_text", [])
+                    company = comp_arr[0].get("text", {}).get("content", "") if comp_arr else ""
+
+                    if not title or not company:
+                        continue
+
+                    portal_str = props.get("Portal", {}).get("select", {}).get("name", "linkedin")
+                    portal = PortalName(portal_str) if portal_str in PortalName._value2member_map_ else PortalName.LINKEDIN
+
+                    estado_str = props.get("Estado", {}).get("select", {}).get("name", "Enviado")
+                    status = ApplicationStatus(estado_str) if estado_str in ApplicationStatus._value2member_map_ else ApplicationStatus.APPLIED
+
+                    modality_str = props.get("Modalidad", {}).get("select", {}).get("name", "remote")
+                    modality = WorkModality(modality_str) if modality_str in WorkModality._value2member_map_ else WorkModality.REMOTE
+
+                    url = props.get("Link Oferta", {}).get("url") or f"https://notion.so/{page_id}"
+                    match_score = int(props.get("Match (%)", {}).get("number") or 70)
+                    times_applied = int(props.get("Veces Postulado", {}).get("number") or 1)
+
+                    date_obj = props.get("Último Envío", {}).get("date") or {}
+                    applied_date = date_obj.get("start")
+                    applied_iso = f"{applied_date}T12:00:00Z" if applied_date else "2026-10-28T12:00:00Z"
+
+                    dedup_key = build_dedup_key(company, title)
+                    existing = repository.find_by_dedup_key(dedup_key)
+
+                    if existing is None:
+                        offer = JobOffer(
+                            portal=portal,
+                            title=title,
+                            company=company,
+                            location="Colombia",
+                            modality=modality,
+                            url=url,
+                            description=f"Restaurada desde Notion ({page_id})",
+                        )
+                        evaluation = MatchEvaluation(
+                            dedup_key=dedup_key,
+                            canonical_url=url,
+                            match_score=match_score,
+                            should_apply=True,
+                            is_hard_rejected=False,
+                            rejection_reason=None,
+                            keywords=(),
+                        )
+                        rec, _ = repository.record_submission(offer, evaluation, applied_at=applied_iso)
+                        if page_id:
+                            repository.update_notion_page_id(rec.id, str(page_id))
+                        repository.update_status(rec.id, status)
+                        restored_count += 1
+
+                return restored_count
         except Exception as ex:
             logger.warning(f"Error bootstrapping Notion data: {ex}")
             return 0
-        if pages is None:
-            return 0
 
-        restored_count = 0
-        for page in pages:
-            # Una página mal formada no debe cortar la restauración del resto.
-            try:
-                if self._restore_page(page, repository, vocabulary):
-                    restored_count += 1
-            except Exception as ex:
-                logger.warning(f"Página de Notion omitida en bootstrap ({page.get('id')}): {ex}")
-        return restored_count
+    def sync(self) -> SyncReport:
+        if not self.is_configured:
+            return SyncReport()
 
-    def _restore_page(
+        apps: list[ApplicationRecord] = []
+        if self.repository is not None:
+            apps = self.repository.find_all(limit=500)
+        return self.sync_applications(apps)
+
+    def sync_applications(
         self,
-        page: dict[str, Any],
-        repository: ApplicationRepository,
-        vocabulary: TechVocabulary | None,
-    ) -> bool:
-        page_id = str(page.get("id"))
-        props: dict[str, Any] = page.get("properties", {})
+        applications: list[ApplicationRecord],
+        config: FilterConfig | None = None,
+    ) -> SyncReport:
+        if not self.is_configured:
+            return SyncReport()
 
-        title_arr = (props.get("Cargo") or {}).get("title") or []
-        title = title_arr[0].get("text", {}).get("content", "") if title_arr else ""
+        pushed_new = 0
+        updated_existing = 0
+        pulled_statuses = 0
 
-        comp_arr = (props.get("Empresa") or {}).get("rich_text") or []
-        company = comp_arr[0].get("text", {}).get("content", "") if comp_arr else ""
+        for app in applications:
+            if not app.notion_page_id:
+                page_id = self.push_application(app)
+                if page_id:
+                    pushed_new += 1
+                    if self.repository is not None:
+                        self.repository.update_notion_page_id(app.id, page_id)
+            elif app.times_applied > 1:
+                if self.update_application(app.notion_page_id, app):
+                    updated_existing += 1
 
-        if not title or not company:
-            return False
+        updates = self.pull_status_updates()
+        page_map = {app.notion_page_id: app for app in applications if app.notion_page_id}
+        for page_id, status_val in updates:
+            if page_id in page_map:
+                local_app = page_map[page_id]
+                if local_app.status.value != status_val:
+                    pulled_statuses += 1
+                    if self.repository is not None:
+                        try:
+                            new_status = ApplicationStatus(status_val)
+                            self.repository.update_status(local_app.id, new_status)
+                        except ValueError:
+                            pass
 
-        dedup_key = build_dedup_key(company, title)
-        if repository.find_by_dedup_key(dedup_key) is not None:
-            return False
-
-        portal_str = _select_name(props, "Portal") or ""
-        portal = PortalName(portal_str) if portal_str in PortalName._value2member_map_ else PortalName.LINKEDIN
-
-        estado_str = _select_name(props, "Estado") or ""
-        status = ApplicationStatus(estado_str) if estado_str in ApplicationStatus._value2member_map_ else ApplicationStatus.APPLIED
-
-        modality_str = _select_name(props, "Modalidad") or ""
-        modality = WorkModality(modality_str) if modality_str in WorkModality._value2member_map_ else WorkModality.REMOTE
-
-        url = (props.get("Link Oferta") or {}).get("url") or f"https://notion.so/{page_id}"
-
-        raw_score = (props.get("Match (%)") or {}).get("number")
-        match_score = int(raw_score) if raw_score is not None else 70
-
-        raw_times = (props.get("Veces Postulado") or {}).get("number")
-        default_times = 0 if status == ApplicationStatus.PENDING else 1
-        times_applied = int(raw_times) if raw_times is not None else default_times
-
-        stack_tags = (props.get("Stack Detectado") or {}).get("multi_select") or []
-        keywords = tuple(
-            KeywordMatch(
-                keyword=str(tag["name"]),
-                is_matched=True,
-                weight=vocabulary.get_weight(str(tag["name"])) if vocabulary else KeywordWeight.BONUS,
-            )
-            for tag in stack_tags
-            if tag.get("name")
+        return SyncReport(
+            pushed_new=pushed_new,
+            updated_existing=updated_existing,
+            pulled_statuses=pulled_statuses,
+            interview_preps_triggered=0,
+            bootstrapped_from_notion=0,
+            stalled_followups=0,
         )
 
-        date_obj = (props.get("Último Envío") or {}).get("date") or {}
-        applied_date = date_obj.get("start")
-        applied_iso = f"{applied_date[:10]}T12:00:00Z" if applied_date else None
-
-        offer = JobOffer(
-            portal=portal,
-            title=title,
-            company=company,
-            location="Colombia",
-            modality=modality,
-            url=url,
-            description=f"Restaurada desde Notion ({page_id})",
-        )
-        evaluation = MatchEvaluation(
-            dedup_key=dedup_key,
-            canonical_url=url,
-            match_score=match_score,
-            should_apply=True,
-            is_hard_rejected=False,
-            rejection_reason=None,
-            keywords=keywords,
-        )
-        rec, _ = repository.record_submission(offer, evaluation, applied_at=applied_iso)
-        repository.update_notion_page_id(rec.id, page_id)
-        repository.update_status(rec.id, status)
-        repository.update_times_applied(rec.id, times_applied)
-        repository.update_notion_synced_status(rec.id, status)
-        return True

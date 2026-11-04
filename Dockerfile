@@ -7,15 +7,13 @@ ENV PYTHONUNBUFFERED=1 \
     HEADLESS=true
 
 COPY requirements.txt pyproject.toml ./
-RUN pip install --no-cache-dir -r requirements.txt \
-    && python -m playwright install --with-deps chromium
+RUN pip install --no-cache-dir -r requirements.txt
 
 COPY src/ ./src/
 COPY cli.py ./
 COPY config/filters.yaml config/profile.example.yaml config/cv_base.example.md ./config/
 
-RUN mkdir -p data interviews followups exports
+RUN mkdir -p data exports /obsidian_vault
 
 ENTRYPOINT ["python", "cli.py"]
-CMD ["stats"]
-
+CMD ["sync"]

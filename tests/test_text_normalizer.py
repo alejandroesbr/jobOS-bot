@@ -10,7 +10,6 @@ from src.domain.text_normalizer import (
     build_dedup_key,
     normalize_canonical_url,
     normalize_company_name,
-    normalize_form_question,
     normalize_job_title,
 )
 
@@ -69,12 +68,6 @@ def test_normalize_canonical_url_preserves_only_jk_param_on_indeed() -> None:
     assert result == "https://co.indeed.com/viewjob?jk=9f8e7d6c"
 
 
-def test_normalize_form_question_removes_punctuation_and_unifies_tech_terms() -> None:
-    raw_label = "* ¿Cuántos años de experiencia tienes trabajando con React.js? (Obligatorio) :"
-    result = normalize_form_question(raw_label)
-    assert result == "cuantos anos de experiencia tienes trabajando con react"
-
-
 def test_application_status_allows_reapplication_only_for_active_non_terminal_states() -> None:
     assert ApplicationStatus.PENDING.allows_reapplication() is True
     assert ApplicationStatus.APPLIED.allows_reapplication() is True
@@ -102,12 +95,3 @@ def test_match_evaluation_separates_matched_and_missing_keywords() -> None:
     assert evaluation.matched_keywords == ("Node.js", "PostgreSQL")
     assert evaluation.missing_keywords == ("AWS",)
 
-
-
-def test_dedup_key_keeps_confidential_companies_apart() -> None:
-    key_a = build_dedup_key("Empresa Confidencial", "Desarrollador Junior", "https://computrabajo.com/oferta-a")
-    key_b = build_dedup_key("Empresa Confidencial", "Desarrollador Junior", "https://computrabajo.com/oferta-b")
-    named = build_dedup_key("Acme", "Desarrollador Junior", "https://computrabajo.com/oferta-a")
-
-    assert key_a != key_b
-    assert named == "acme::desarrollador junior"
