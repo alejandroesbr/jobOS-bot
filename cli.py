@@ -1,63 +1,159 @@
-import csv
+"""jobOS-bot v2.0 - 4 Nuclear CLI Commands.
+
+Clean Architecture + CQS + Multi-Worker + Obsidian Graph Database.
+Only 4 commands: scan, sync, auth, export.
+All other operations via MCP server.
+"""
+
+from dotenv import load_dotenv
+load_dotenv()
+
 import json
-from pathlib import Path
 import sys
-from typing import Any
+from pathlib import Path
+from typing import Optional
 
 import click
-from rich.markdown import Markdown
+from rich.console import Console
 
 from src.adapters.db.repository import ApplicationRepository
-from src.config_loader import load_filter_config
-from src.domain.models import ApplicationStatus, PortalName
-from src.services.assist_service import AssistService
-from src.services.career_service import CareerService
-from src.services.scan_service import ScanService
-from src.ui.console import (
-    console,
-    print_application_stats,
-    print_banner,
-    print_error,
-    print_export_success,
-    print_scan_summary,
-    print_warning,
+from src.adapters.obsidian.adapter import ObsidianVaultAdapter
+from src.adapters.scrapers.orchestrator import (
+    MultiWorkerScraperOrchestrator,
+    DEFAULT_PORTAL_REGISTRY,
 )
+from src.application.commands import (
+    ScanPortalsCommand,
+    ScanPortalsResult,
+    SyncVaultCommand,
+    SyncVaultResult,
+    SyncExternalCommand,
+    SyncExternalResult,
+)
+from src.application.handlers import (
+    ScanPortalsHandler,
+    SyncVaultHandler,
+    SyncExternalHandler,
+)
+from src.application.queries import (
+    GetApplicationsQuery,
+    GetApplicationsResult,
+)
+from src.application.handlers import GetApplicationsHandler
+from src.config_loader import load_filter_config
+from src.domain.models import PortalName
+from src.ports.repository_port import ApplicationRepositoryPort
+from src.ports.vault_port import KnowledgeVaultPort
+from src.ports.scraper_port import MultiPortalScraperPort
+
+
+console = Console()
+
+
+def print_banner(title: str, subtitle: str = "") -> None:
+    console.print(f"\n[bold cyan]═══ {title} ═══[/bold cyan]")
+    if subtitle:
+        console.print(f"[dim]{subtitle}[/dim]")
+    console.print()
+
+
+def print_error(message: str) -> None:
+    console.print(f"[bold red]✗ Error:[/bold red] {message}")
+
+
+def print_success(message: str) -> None:
+    console.print(f"[bold green]✓ {message}[/bold green]")
+
+
+def print_warning(message: str) -> None:
+    console.print(f"[bold yellow]⚠ {message}[/bold yellow]")
+
+
+def print_info(message: str) -> None:
+    console.print(f"[cyan]ℹ {message}[/cyan]")
 
 
 @click.group()
 def cli() -> None:
-    """jobOS-bot — Asistente de Búsqueda Laboral y Automatización Hexagonal."""
+    """jobOS-bot v2.0 — Concurrent Multi-Worker Intelligence Engine with Local Graph Database.
+
+    4 Nuclear Commands:
+      scan   - Multi-worker concurrent scan with Obsidian sync
+      sync   - Obsidian vault sync (rebuild or incremental)
+      auth   - Browser authentication for portals
+      export - Export applications to JSON/CSV
+    """
     pass
 
+
+# ============================================================================
+# SCAN COMMAND - Multi-worker concurrent scan with Obsidian sync
+# ============================================================================
 
 @cli.command(name="scan")
 @click.option(
     "--portal",
     "portal_arg",
     default="all",
-    help="Portal a escanear: linkedin, getonbrd, computrabajo, elempleo, glassdoor, indeed o all (separados por coma).",
+    help="Portales a escanear: linkedin, getonbrd, computrabajo, elempleo, glassdoor, indeed o all (separados por coma).",
 )
 @click.option(
     "--limit",
     "limit_arg",
-    default=10,
+    default=15,
     type=int,
     help="Límite máximo de ofertas a procesar por portal.",
 )
 @click.option(
     "--headless/--no-headless",
     default=True,
-    help="Ejecutar el navegador de forma invisible (headless) o visible.",
+    help="Ejecutar el navegador en modo headless (invisible) o visible.",
+)
+@click.option(
+    "--workers",
+    "max_workers",
+    default=4,
+    type=int,
+    help="Número máximo de workers concurrentes (1-6).",
 )
 @click.option(
     "--db-path",
     default="data/jobs.db",
     help="Ruta al archivo SQLite local.",
 )
-def scan_cmd(portal_arg: str, limit_arg: int, headless: bool, db_path: str) -> None:
-    """Escanea portales de empleo de forma secuencial single-thread y registra postulaciones."""
-    print_banner("jobOS-bot — Motor de Escaneo Multi-Portal", "Ejecución secuencial single-thread con graceful degradation")
+@click.option(
+    "--vault-path",
+    default="vault",
+    help="Ruta al vault de Obsidian.",
+)
+@click.option(
+    "--no-obsidian",
+    is_flag=True,
+    default=False,
+    help="Desactivar sincronización con Obsidian vault.",
+)
+@click.option(
+    "--schema-v2/--schema-v1",
+    default=True,
+    help="Usar schema v2.0 con índices compuestos y tablas de métricas.",
+)
+def scan_cmd(
+    portal_arg: str,
+    limit_arg: int,
+    headless: bool,
+    max_workers: int,
+    db_path: str,
+    vault_path: str,
+    no_obsidian: bool,
+    schema_v2: bool,
+) -> None:
+    """Escaneo multi-worker concurrente con aislamiento de BrowserContext y sync a Obsidian."""
+    print_banner(
+        "jobOS-bot v2.0 — Motor Multi-Worker Concurrente",
+        f"Workers: {max_workers} | Headless: {headless} | Obsidian: {'OFF' if no_obsidian else 'ON'}"
+    )
 
+    # Parse portals
     portals: list[PortalName] = []
     if portal_arg.lower().strip() == "all":
         portals = list(PortalName)
@@ -73,208 +169,162 @@ def scan_cmd(portal_arg: str, limit_arg: int, headless: bool, db_path: str) -> N
         print_error("No se especificaron portales válidos para el escaneo.")
         sys.exit(1)
 
-    repo = ApplicationRepository(db_path)
-    config = load_filter_config()
-    service = ScanService(repository=repo, config=config)
-
+    # Initialize dependencies
     try:
-        summary = service.run_scan_pipeline(
+        # Repository with schema v2.0 if requested
+        repo = ApplicationRepository(db_path)
+        if schema_v2:
+            _initialize_schema_v2(repo)
+
+        config = load_filter_config()
+
+        # Multi-worker orchestrator
+        orchestrator: MultiPortalScraperPort = MultiWorkerScraperOrchestrator(
+            registry=DEFAULT_PORTAL_REGISTRY,
+            max_workers=max_workers,
+        )
+
+        # Vault adapter (optional)
+        vault: KnowledgeVaultPort | None = None
+        if not no_obsidian:
+            vault = ObsidianVaultAdapter(vault_path)
+
+        # Create and execute command via handler
+        command = ScanPortalsCommand(
             portals=portals,
             limit_per_portal=limit_arg,
             headless=headless,
+            max_workers=max_workers,
+            sync_obsidian=not no_obsidian,
+            vault_path=vault_path,
+            config=config,
         )
-        print_scan_summary(summary)
-    finally:
-        repo.close()
 
+        handler = ScanPortalsHandler(
+            repository=repo,
+            scraper=orchestrator,
+            vault=vault,
+        )
 
-@cli.command(name="stats")
-@click.option(
-    "--db-path",
-    default="data/jobs.db",
-    help="Ruta al archivo SQLite local.",
-)
-def stats_cmd(db_path: str) -> None:
-    """Muestra estadísticas actuales del pipeline y radar de tecnologías más demandadas."""
-    print_banner("jobOS-bot — Estadísticas y Radar de Mercado", "Resumen de aplicaciones SQLite 3NF")
-    db_file = Path(db_path)
-    if not db_file.is_file():
-        print_warning(f"No existe la base de datos en '{db_path}'. Ejecuta un escaneo primero con 'scan'.")
-        return
+        result: ScanPortalsResult = handler.handle(command)
 
-    repo = ApplicationRepository(db_path)
-    try:
-        records = repo.find_all(limit=500)
-        kw_stats = repo.get_keyword_stats()
-        print_application_stats(records, kw_stats)
-    finally:
-        repo.close()
+        # Print summary
+        _print_scan_summary(result)
 
-
-@cli.command(name="export")
-@click.option(
-    "--format",
-    "export_format",
-    type=click.Choice(["json", "csv"], case_sensitive=False),
-    default="json",
-    help="Formato de exportación (json o csv).",
-)
-@click.option(
-    "--output",
-    "output_arg",
-    default=None,
-    help="Ruta del archivo de salida. Por defecto 'exports/applications.<formato>'.",
-)
-@click.option(
-    "--status",
-    "status_arg",
-    default=None,
-    help="Filtrar por estado específico (ej. 'Enviado', 'Entrevista Programada').",
-)
-@click.option(
-    "--db-path",
-    default="data/jobs.db",
-    help="Ruta al archivo SQLite local.",
-)
-def export_cmd(export_format: str, output_arg: str | None, status_arg: str | None, db_path: str) -> None:
-    """Exporta las vacantes registradas en SQLite a formato JSON o CSV."""
-    db_file = Path(db_path)
-    if not db_file.is_file():
-        print_error(f"Base de datos no encontrada en '{db_path}'.")
-        sys.exit(1)
-
-    repo = ApplicationRepository(db_path)
-    try:
-        app_status = ApplicationStatus(status_arg) if status_arg else None
-        records = repo.find_all(status=app_status, limit=1000)
-
-        out_path = Path(output_arg) if output_arg else Path(f"exports/applications.{export_format.lower()}")
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-
-        if export_format.lower() == "json":
-            data = [
-                {
-                    "id": r.id,
-                    "dedup_key": r.dedup_key,
-                    "title": r.title,
-                    "company": r.company,
-                    "location": r.location,
-                    "modality": r.modality.value,
-                    "match_score": r.match_score,
-                    "times_applied": r.times_applied,
-                    "status": r.status.value,
-                    "first_applied_at": r.first_applied_at,
-                    "last_applied_at": r.last_applied_at,
-                    "submissions": [
-                        {
-                            "attempt": s.attempt_number,
-                            "portal": s.portal.value,
-                            "url": s.canonical_url,
-                            "applied_at": s.applied_at,
-                        }
-                        for s in r.submissions
-                    ],
-                    "keywords": [
-                        {"keyword": k.keyword, "matched": k.is_matched, "weight": int(k.weight)}
-                        for k in r.keywords
-                    ],
-                }
-                for r in records
-            ]
-            out_path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
-        else:
-            with out_path.open("w", newline="", encoding="utf-8") as f:
-                writer = csv.writer(f)
-                writer.writerow([
-                    "ID", "Título", "Empresa", "Ubicación", "Modalidad",
-                    "Match %", "Veces Postulado", "Estado", "Primer Intento", "Último Intento"
-                ])
-                for r in records:
-                    writer.writerow([
-                        r.id, r.title, r.company, r.location, r.modality.value,
-                        r.match_score, r.times_applied, r.status.value,
-                        r.first_applied_at or "", r.last_applied_at or ""
-                    ])
-
-        print_export_success(export_format, str(out_path), len(records))
-    finally:
-        repo.close()
-
-
-@cli.command(name="tailor")
-@click.argument("job_id", type=int)
-@click.option("--db-path", default="data/jobs.db", help="Ruta al archivo SQLite local.")
-def tailor_cmd(job_id: int, db_path: str) -> None:
-    """Optimiza tu CV para una vacante específica detectando la brecha de keywords ATS."""
-    repo = ApplicationRepository(db_path)
-    try:
-        service = CareerService(repository=repo)
-        analysis = service.tailor_cv(job_id)
-        print_banner(f"jobOS-bot — Adaptación Quirúrgica de CV (Vacante #{job_id})")
-        console.print(Markdown(analysis))
     except Exception as ex:
-        print_error(str(ex))
+        print_error(f"Error durante el escaneo: {ex}")
         sys.exit(1)
     finally:
-        repo.close()
+        try:
+            repo.close()
+        except Exception:
+            pass
 
 
-@cli.command(name="prep")
-@click.argument("job_id", type=int)
-@click.option("--db-path", default="data/jobs.db", help="Ruta al archivo SQLite local.")
-def prep_cmd(job_id: int, db_path: str) -> None:
-    """Genera una guía técnica completa de entrevista (preguntas, live coding y preguntas para el entrevistador)."""
-    repo = ApplicationRepository(db_path)
-    try:
-        service = CareerService(repository=repo)
-        out_path = service.prepare_interview(job_id)
-        print_banner(f"jobOS-bot — Preparador de Entrevista Técnica (Vacante #{job_id})")
-        console.print(f"[bold green]Guía técnica generada con éxito en:[/bold green] [cyan]{out_path}[/cyan]")
-    except Exception as ex:
-        print_error(str(ex))
-        sys.exit(1)
-    finally:
-        repo.close()
+def _initialize_schema_v2(repo: ApplicationRepository) -> None:
+    """Initialize schema v2.0 with composite indexes and new tables."""
+    schema_path = Path(__file__).parent / "src" / "adapters" / "db" / "schema_v2.sql"
+    if schema_path.is_file():
+        sql = schema_path.read_text(encoding="utf-8")
+        repo._conn.executescript(sql)
+        print_info("Schema v2.0 inicializado (índices compuestos, tablas métricas, triggers)")
+    else:
+        print_warning("schema_v2.sql no encontrado, usando schema v1")
 
+
+def _print_scan_summary(result: ScanPortalsResult) -> None:
+    """Print formatted scan summary."""
+    console.print()
+    console.print(f"[bold]TOTAL ESCANEADO:[/bold] {result.total_scanned} ofertas")
+    console.print(f"[bold]TOTAL MATCH (≥{40}%):[/bold] {result.total_matched}")
+    console.print(f"[green]Nuevas postulaciones:[/green] {result.new_applications}")
+    console.print(f"[blue]Re-postulaciones:[/blue] {result.reapplications}")
+    console.print(f"[yellow]Saltadas por cooldown:[/yellow] {result.skipped_cooldown}")
+    console.print(f"[red]Hard rejects:[/red] {result.hard_rejected}")
+
+    if result.offers_by_portal:
+        console.print("\n[bold]Por portal:[/bold]")
+        for portal, count in result.offers_by_portal.items():
+            console.print(f"  {portal}: {count}")
+
+    if result.errors_by_portal:
+        console.print("\n[bold red]Errores:[/bold red]")
+        for portal, error in result.errors_by_portal.items():
+            console.print(f"  {portal}: {error}")
+
+    if result.obsidian_synced:
+        console.print(f"\n[bold cyan]Obsidian:[/bold cyan] {result.obsidian_created} creadas, {result.obsidian_updated} actualizadas")
+
+    console.print(f"\n[dim]Tiempo de ejecución: {result.execution_time_ms}ms[/dim]")
+
+
+# ============================================================================
+# SYNC COMMAND - Obsidian vault sync (rebuild or incremental)
+# ============================================================================
 
 @cli.command(name="sync")
-@click.option("--db-path", default="data/jobs.db", help="Ruta al archivo SQLite local.")
-def sync_cmd(db_path: str) -> None:
-    """Sincroniza la base de datos local con Notion y detecta follow-ups estancados."""
-    print_banner("jobOS-bot — Sincronizador con Notion y Detección de Follow-ups")
-    repo = ApplicationRepository(db_path)
+@click.option(
+    "--db-path",
+    default="data/jobs.db",
+    help="Ruta al archivo SQLite local.",
+)
+@click.option(
+    "--vault-path",
+    default="vault",
+    help="Ruta al vault de Obsidian.",
+)
+@click.option(
+    "--rebuild/--incremental",
+    default=False,
+    help="Reconstruir vault completo (borra notas existentes) o sync incremental.",
+)
+def sync_cmd(db_path: str, vault_path: str, rebuild: bool) -> None:
+    """Sincroniza base de datos SQLite con vault Obsidian (Graphify-compatible)."""
+    action = "REBUILD completo" if rebuild else "INCREMENTAL"
+    print_banner(
+        f"jobOS-bot v2.0 — Sync Obsidian Vault ({action})",
+        f"DB: {db_path} | Vault: {vault_path}"
+    )
+
     try:
-        service = CareerService(repository=repo)
-        report = service.sync_with_notion()
-        console.print(f"[green]• Vacantes nuevas enviadas a Notion (Push):[/green] {report.pushed_new}")
-        console.print(f"[blue]• Re-postulaciones actualizadas en Notion:[/blue] {report.updated_existing}")
-        console.print(f"[cyan]• Cambios de estado leídos desde Notion (Pull):[/cyan] {report.pulled_statuses}")
-        console.print(f"[magenta]• Guías técnicas generadas automáticamente:[/magenta] {report.interview_preps_triggered}")
-        console.print(f"[yellow]• Postulaciones marcadas para seguimiento (+7 días):[/yellow] {report.stalled_followups}")
-        if report.bootstrapped_from_notion > 0:
-            console.print(f"[bold green]• Vacantes restauradas desde Notion (Bootstrap Multi-PC):[/bold green] {report.bootstrapped_from_notion}")
+        repo = ApplicationRepository(db_path)
+        vault = ObsidianVaultAdapter(vault_path)
+
+        # Get all applications
+        applications = repo.find_all(limit=10000)
+
+        if rebuild:
+            command = SyncVaultCommand(
+                applications=applications,
+                vault_path=vault_path,
+                full_rebuild=True,
+            )
+        else:
+            command = SyncVaultCommand(
+                applications=applications,
+                vault_path=vault_path,
+                full_rebuild=False,
+            )
+
+        handler = SyncVaultHandler(vault=vault)
+        result: SyncVaultResult = handler.handle(command)
+
+        print_success(f"Vault sincronizado: {result.created} creadas, {result.updated} actualizadas, {result.hubs_updated} hubs")
+        console.print(f"[dim]Tiempo: {result.execution_time_ms}ms[/dim]")
+
     except Exception as ex:
-        print_error(str(ex))
+        print_error(f"Error sincronizando vault: {ex}")
         sys.exit(1)
     finally:
-        repo.close()
+        try:
+            repo.close()
+        except Exception:
+            pass
 
 
-@cli.command(name="assist")
-@click.argument("url")
-@click.option("--db-path", default="data/jobs.db", help="Ruta al archivo SQLite local.")
-def assist_cmd(url: str, db_path: str) -> None:
-    """Abre el navegador en modo copiloto y autocompleta el formulario de postulación."""
-    repo = ApplicationRepository(db_path)
-    try:
-        service = AssistService(repository=repo)
-        service.run_assist(url)
-    except Exception as ex:
-        print_error(str(ex))
-        sys.exit(1)
-    finally:
-        repo.close()
-
+# ============================================================================
+# AUTH COMMAND - Browser authentication for portals
+# ============================================================================
 
 PORTAL_LOGIN_URLS: dict[str, str] = {
     "linkedin": "https://www.linkedin.com/login",
@@ -294,7 +344,7 @@ PORTAL_LOGIN_URLS: dict[str, str] = {
     default=None,
     help="Ruta donde se guardará el estado de cookies y tokens de sesión.",
 )
-def auth_cmd(portal: str | None, output_path: str | None) -> None:
+def auth_cmd(portal: Optional[str], output_path: Optional[str]) -> None:
     """Abre el navegador en modo visible para iniciar sesión manual en un portal y exportar cookies."""
     from playwright.sync_api import sync_playwright
 
@@ -309,7 +359,7 @@ def auth_cmd(portal: str | None, output_path: str | None) -> None:
     out_file.parent.mkdir(parents=True, exist_ok=True)
 
     print_banner(
-        f"jobOS-bot — Gestor de Autenticación [{portal_name.upper()}]",
+        f"jobOS-bot v2.0 — Gestor de Autenticación [{portal_name.upper()}]",
         "Inicia sesión manualmente en el navegador y presiona ENTER en la consola cuando termines.",
     )
 
@@ -355,6 +405,122 @@ def auth_cmd(portal: str | None, output_path: str | None) -> None:
 
     console.print(f"[bold green]✓ Sesión exportada correctamente a:[/bold green] {out_file}")
     console.print(f"[dim]✓ Sincronizado en: {default_global_state}[/dim]")
+
+
+# ============================================================================
+# EXPORT COMMAND - Export applications to JSON/CSV
+# ============================================================================
+
+@cli.command(name="export")
+@click.option(
+    "--format",
+    "export_format",
+    type=click.Choice(["json", "csv"], case_sensitive=False),
+    default="json",
+    help="Formato de exportación (json o csv).",
+)
+@click.option(
+    "--output",
+    "output_arg",
+    default=None,
+    help="Ruta del archivo de salida. Por defecto 'exports/applications.<formato>'.",
+)
+@click.option(
+    "--status",
+    "status_arg",
+    default=None,
+    help="Filtrar por estado específico (ej. 'Enviado', 'Entrevista Programada').",
+)
+@click.option(
+    "--db-path",
+    default="data/jobs.db",
+    help="Ruta al archivo SQLite local.",
+)
+def export_cmd(export_format: str, output_arg: Optional[str], status_arg: Optional[str], db_path: str) -> None:
+    """Exporta las vacantes registradas en SQLite a formato JSON o CSV."""
+    print_banner(
+        "jobOS-bot v2.0 — Exportación de Datos",
+        f"Formato: {export_format.upper()} | Filtro: {status_arg or 'Todos'}"
+    )
+
+    db_file = Path(db_path)
+    if not db_file.is_file():
+        print_error(f"Base de datos no encontrada en '{db_path}'.")
+        sys.exit(1)
+
+    try:
+        repo = ApplicationRepository(db_path)
+
+        # Use query handler for consistent data access
+        query = GetApplicationsQuery(
+            status=status_arg,
+            min_match_score=None,
+            keyword=None,
+            limit=10000,
+            offset=0,
+        )
+        handler = GetApplicationsHandler(repository=repo)
+        result: GetApplicationsResult = handler.handle(query)
+
+        out_path = Path(output_arg) if output_arg else Path(f"exports/applications.{export_format.lower()}")
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+
+        if export_format.lower() == "json":
+            data = [
+                {
+                    "id": app.id,
+                    "dedup_key": app.dedup_key,
+                    "title": app.title,
+                    "company": app.company,
+                    "location": app.location,
+                    "modality": app.modality,
+                    "match_score": app.match_score,
+                    "times_applied": app.times_applied,
+                    "status": app.status,
+                    "first_applied_at": app.first_applied_at,
+                    "last_applied_at": app.last_applied_at,
+                    "submissions": [
+                        {
+                            "attempt": s.attempt_number,
+                            "portal": s.portal,
+                            "url": s.canonical_url,
+                            "applied_at": s.applied_at,
+                        }
+                        for s in app.submissions
+                    ],
+                    "keywords": [
+                        {"keyword": k.keyword, "matched": k.is_matched, "weight": int(k.weight)}
+                        for k in app.keywords
+                    ],
+                }
+                for app in result.applications
+            ]
+            out_path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+        else:
+            import csv
+            with out_path.open("w", newline="", encoding="utf-8") as f:
+                writer = csv.writer(f)
+                writer.writerow([
+                    "ID", "Título", "Empresa", "Ubicación", "Modalidad",
+                    "Match %", "Veces Postulado", "Estado", "Primer Intento", "Último Intento"
+                ])
+                for app in result.applications:
+                    writer.writerow([
+                        app.id, app.title, app.company, app.location, app.modality,
+                        app.match_score, app.times_applied, app.status,
+                        app.first_applied_at or "", app.last_applied_at or ""
+                    ])
+
+        print_success(f"Exportado {len(result.applications)} registros a {out_path}")
+
+    except Exception as ex:
+        print_error(f"Error exportando: {ex}")
+        sys.exit(1)
+    finally:
+        try:
+            repo.close()
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":

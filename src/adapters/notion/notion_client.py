@@ -1,3 +1,4 @@
+from dotenv import load_dotenv
 import logging
 import os
 from typing import Any
@@ -22,6 +23,14 @@ logger = logging.getLogger(__name__)
 NOTION_API_BASE = "https://api.notion.com/v1"
 NOTION_VERSION = "2022-06-28"
 
+def _clean_database_id(raw_id: str) -> str:
+    cleaned = raw_id.strip()
+    if "/" in cleaned:
+        cleaned = cleaned.split("/")[-1]
+    if "?" in cleaned:
+        cleaned = cleaned.split("?")[0]
+    return cleaned.replace("-", "")
+
 
 class NotionClient:
     def __init__(
@@ -30,8 +39,11 @@ class NotionClient:
         database_id: str | None = None,
         timeout: float = 15.0,
     ) -> None:
-        self.api_token = api_token or os.getenv("NOTION_TOKEN", "")
-        self.database_id = database_id or os.getenv("NOTION_DATABASE_ID", "")
+        load_dotenv()
+        token = api_token if api_token is not None else (os.getenv("NOTION_TOKEN") or os.getenv("NOTION_API_KEY") or "")
+        self.api_token = token.strip()
+        raw_db_id = database_id if database_id is not None else (os.getenv("NOTION_DATABASE_ID") or "")
+        self.database_id = _clean_database_id(raw_db_id)
         self.timeout = timeout
 
     @property

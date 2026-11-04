@@ -29,7 +29,10 @@ def _days_between(date_str_1: str, date_str_2: str) -> float:
     return abs((dt1 - dt2).total_seconds()) / 86400.0
 
 
-class ApplicationRepository:
+from src.ports.repository_port import ApplicationRepositoryPort
+
+
+class ApplicationRepository(ApplicationRepositoryPort):
     def __init__(self, connection: sqlite3.Connection | str = ":memory:") -> None:
         if isinstance(connection, str):
             db_path = Path(connection)
