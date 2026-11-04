@@ -41,19 +41,6 @@ class KeywordWeight(IntEnum):
     CORE = 3
 
 
-class QuestionCategory(StrEnum):
-    SALARY_COP = "salary_cop"
-    SALARY_USD = "salary_usd"
-    EXPERIENCE = "experience"
-    LOCATION = "location"
-    GENERAL = "general"
-
-
-class AnswerSource(StrEnum):
-    PROFILE_SEED = "profile_seed"
-    USER_CONFIRMED = "user_confirmed"
-
-
 @dataclass(frozen=True, slots=True)
 class CandidatePersonalInfo:
     full_name: str
@@ -165,17 +152,5 @@ class ApplicationRecord:
     first_applied_at: str | None = None
     last_applied_at: str | None = None
     notion_page_id: str | None = None
-    cv_tailor_cache: str | None = None
-    interview_prep_path: str | None = None
     submissions: tuple[SubmissionAttempt, ...] = ()
     keywords: tuple[KeywordMatch, ...] = ()
-
-
-@dataclass(frozen=True, slots=True)
-class QuestionMatch:
-    question_norm: str
-    answer: str
-    similarity_score: float
-    category: QuestionCategory
-    source: AnswerSource
-    is_confident_match: bool

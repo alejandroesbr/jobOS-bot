@@ -6,6 +6,7 @@ from typing import Any
 import httpx
 
 from src.adapters.db.repository import ApplicationRepository
+from src.config_loader import FilterConfig
 from src.domain.models import (
     ApplicationRecord,
     ApplicationStatus,
@@ -17,6 +18,8 @@ from src.domain.models import (
     WorkModality,
 )
 from src.domain.text_normalizer import build_dedup_key
+from src.ports.external_sync_port import ExternalSyncPort, SyncReport
+from src.ports.repository_port import ApplicationRepositoryPort
 
 logger = logging.getLogger(__name__)
 
@@ -32,12 +35,13 @@ def _clean_database_id(raw_id: str) -> str:
     return cleaned.replace("-", "")
 
 
-class NotionClient:
+class NotionClient(ExternalSyncPort):
     def __init__(
         self,
         api_token: str | None = None,
         database_id: str | None = None,
         timeout: float = 15.0,
+        repository: ApplicationRepositoryPort | None = None,
     ) -> None:
         load_dotenv()
         token = api_token if api_token is not None else (os.getenv("NOTION_TOKEN") or os.getenv("NOTION_API_KEY") or "")
@@ -45,6 +49,7 @@ class NotionClient:
         raw_db_id = database_id if database_id is not None else (os.getenv("NOTION_DATABASE_ID") or "")
         self.database_id = _clean_database_id(raw_db_id)
         self.timeout = timeout
+        self.repository = repository
 
     @property
     def is_configured(self) -> bool:
@@ -165,7 +170,7 @@ class NotionClient:
             logger.warning(f"Error pulling status updates from Notion: {ex}")
             return []
 
-    def bootstrap_to_repository(self, repository: ApplicationRepository) -> int:
+    def bootstrap_to_repository(self, repository: ApplicationRepositoryPort) -> int:
         if not self.is_configured:
             return 0
 
@@ -235,7 +240,8 @@ class NotionClient:
                             keywords=(),
                         )
                         rec, _ = repository.record_submission(offer, evaluation, applied_at=applied_iso)
-                        repository.update_notion_page_id(rec.id, page_id)
+                        if page_id:
+                            repository.update_notion_page_id(rec.id, str(page_id))
                         repository.update_status(rec.id, status)
                         restored_count += 1
 
@@ -243,4 +249,59 @@ class NotionClient:
         except Exception as ex:
             logger.warning(f"Error bootstrapping Notion data: {ex}")
             return 0
+
+    def sync(self) -> SyncReport:
+        if not self.is_configured:
+            return SyncReport()
+
+        apps: list[ApplicationRecord] = []
+        if self.repository is not None:
+            apps = self.repository.find_all(limit=500)
+        return self.sync_applications(apps)
+
+    def sync_applications(
+        self,
+        applications: list[ApplicationRecord],
+        config: FilterConfig | None = None,
+    ) -> SyncReport:
+        if not self.is_configured:
+            return SyncReport()
+
+        pushed_new = 0
+        updated_existing = 0
+        pulled_statuses = 0
+
+        for app in applications:
+            if not app.notion_page_id:
+                page_id = self.push_application(app)
+                if page_id:
+                    pushed_new += 1
+                    if self.repository is not None:
+                        self.repository.update_notion_page_id(app.id, page_id)
+            elif app.times_applied > 1:
+                if self.update_application(app.notion_page_id, app):
+                    updated_existing += 1
+
+        updates = self.pull_status_updates()
+        page_map = {app.notion_page_id: app for app in applications if app.notion_page_id}
+        for page_id, status_val in updates:
+            if page_id in page_map:
+                local_app = page_map[page_id]
+                if local_app.status.value != status_val:
+                    pulled_statuses += 1
+                    if self.repository is not None:
+                        try:
+                            new_status = ApplicationStatus(status_val)
+                            self.repository.update_status(local_app.id, new_status)
+                        except ValueError:
+                            pass
+
+        return SyncReport(
+            pushed_new=pushed_new,
+            updated_existing=updated_existing,
+            pulled_statuses=pulled_statuses,
+            interview_preps_triggered=0,
+            bootstrapped_from_notion=0,
+            stalled_followups=0,
+        )
 

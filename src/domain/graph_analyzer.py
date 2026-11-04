@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from itertools import combinations
-from typing import TYPE_CHECKING
+from typing import Any, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -76,7 +76,8 @@ class GraphAnalyzer:
 
     def __init__(self) -> None:
         """Initialize analyzer with empty state."""
-        self._graph: object | None = None
+        self._graph: Any = None
+        self._skill_demand: dict[str, int] = {}
         self._skill_to_index: dict[str, int] = {}
         self._index_to_skill: list[str] = []
         self._communities: dict[str, int] = {}
@@ -120,6 +121,7 @@ class GraphAnalyzer:
             self._skill_to_index[skill] = idx
             self._index_to_skill.append(skill)
 
+        self._skill_demand = dict(skill_demand)
         self._build_networkx_graph(skill_demand, co_occurrence)
         self._detect_communities()
         self._mine_associations(app_list, skill_demand)
@@ -138,7 +140,7 @@ class GraphAnalyzer:
             co_occurrence: Mapping of (skill_a, skill_b) -> co-occurrence count.
         """
         try:
-            import networkx as nx
+            import networkx as nx  # type: ignore[import-untyped]
         except ImportError:
             self._graph = None
             return
@@ -150,14 +152,21 @@ class GraphAnalyzer:
 
         for (skill_a, skill_b), count in co_occurrence.items():
             if count >= self.MIN_CO_OCCURRENCE:
-                graph.add_edge(skill_a, skill_b, weight=count, co_occurrence=count)
+                distance = 1.0 / max(count, 1)
+                graph.add_edge(
+                    skill_a,
+                    skill_b,
+                    weight=count,
+                    co_occurrence=count,
+                    distance=distance,
+                )
 
         self._graph = graph
 
     def _detect_communities(self) -> None:
-        """Detect skill communities using Louvain algorithm (python-louvain).
+        """Detect skill communities using NetworkX native Louvain algorithm.
 
-        Falls back to connected components if python-louvain is unavailable.
+        Falls back to connected components if Louvain fails (e.g., edgeless graph).
         Stores community_id per skill in self._communities.
         """
         if self._graph is None:
@@ -165,18 +174,28 @@ class GraphAnalyzer:
                 self._communities[skill] = hash(skill) % 1000
             return
 
-        try:
-            import community as community_louvain
-        except ImportError:
-            import networkx as nx
+        import networkx as nx
 
-            for comp_id, component in enumerate(nx.connected_components(self._graph)):
-                for skill in component:
-                    self._communities[skill] = comp_id
+        if self._graph.number_of_nodes() == 0:
             return
 
-        partition = community_louvain.best_partition(self._graph)
-        self._communities = partition
+        if self._graph.number_of_edges() > 0:
+            try:
+                communities = nx.community.louvain_communities(
+                    self._graph,
+                    weight="weight",
+                    seed=42,
+                )
+                for comp_id, community_nodes in enumerate(communities):
+                    for skill in community_nodes:
+                        self._communities[str(skill)] = comp_id
+                return
+            except Exception:
+                pass
+
+        for comp_id, component in enumerate(nx.connected_components(self._graph)):
+            for skill in component:
+                self._communities[str(skill)] = comp_id
 
     def _mine_associations(
         self,
@@ -219,8 +238,11 @@ class GraphAnalyzer:
             return
 
         rules: list[AssociationRule] = []
-        for pair, pair_count in frequent_2.items():
-            skill_a, skill_b = tuple(pair)
+        for pair_set, pair_count in frequent_2.items():
+            pair_list = sorted(pair_set)
+            if len(pair_list) != 2:
+                continue
+            skill_a, skill_b = pair_list[0], pair_list[1]
             count_a = skill_demand[skill_a]
             count_b = skill_demand[skill_b]
 
@@ -266,16 +288,21 @@ class GraphAnalyzer:
 
         graph = self._graph
 
-        degree_centrality = nx.degree_centrality(graph)
-        betweenness_centrality = nx.betweenness_centrality(graph, weight="weight")
+        for _u, _v, data in graph.edges(data=True):
+            if "distance" not in data:
+                w = int(data.get("weight", 1))
+                data["distance"] = 1.0 / max(w, 1)
 
-        metrics = []
+        degree_centrality = nx.degree_centrality(graph)
+        betweenness_centrality = nx.betweenness_centrality(graph, weight="distance")
+
+        metrics: list[SkillMetrics] = []
         for skill in self._index_to_skill:
-            demand = graph.nodes[skill].get("demand", 0)
-            degree = degree_centrality.get(skill, 0.0)
-            betweenness = betweenness_centrality.get(skill, 0.0)
-            community = self._communities.get(skill, -1)
-            mastery = mastery_levels.get(skill, 0.0)
+            demand = int(graph.nodes[skill].get("demand", 0))
+            degree = float(degree_centrality.get(skill, 0.0))
+            betweenness = float(betweenness_centrality.get(skill, 0.0))
+            community = int(self._communities.get(skill, -1))
+            mastery = float(mastery_levels.get(skill, 0.0))
             priority = demand * (1.0 - mastery)
 
             metrics.append(SkillMetrics(
@@ -293,16 +320,16 @@ class GraphAnalyzer:
 
     def _get_basic_metrics(self, mastery_levels: dict[str, float]) -> list[SkillMetrics]:
         """Fallback metrics when NetworkX is unavailable."""
-        metrics = []
+        metrics: list[SkillMetrics] = []
         for skill in self._index_to_skill:
-            demand = 0
+            demand = self._skill_demand.get(skill, 0)
             if self._graph is not None:
                 try:
-                    demand = self._graph.nodes[skill].get("demand", 0)
+                    demand = int(self._graph.nodes[skill].get("demand", demand))
                 except (AttributeError, KeyError):
                     pass
 
-            mastery = mastery_levels.get(skill, 0.0)
+            mastery = float(mastery_levels.get(skill, 0.0))
             metrics.append(SkillMetrics(
                 name=skill,
                 demand=demand,
@@ -316,20 +343,25 @@ class GraphAnalyzer:
         metrics.sort(key=lambda m: m.priority_score, reverse=True)
         return metrics
 
-    def get_learning_priority_matrix(self, top_k: int = 20) -> list[dict]:
+    def get_learning_priority_matrix(
+        self,
+        top_k: int = 20,
+        mastery_levels: dict[str, float] | None = None,
+    ) -> list[dict[str, Any]]:
         """Generate learning priority matrix for UI display.
 
         Args:
             top_k: Number of top skills to return.
+            mastery_levels: Optional mapping of skill -> user mastery level (0.0-1.0).
 
         Returns:
             List of dicts with keys: skill, demand, degree_centrality,
             betweenness_centrality, community, mastery, priority.
         """
-        mastery_levels: dict[str, float] = {}
-        metrics = self.get_skill_metrics(mastery_levels)
+        effective_mastery = mastery_levels if mastery_levels is not None else {}
+        metrics = self.get_skill_metrics(effective_mastery)
 
-        matrix = []
+        matrix: list[dict[str, Any]] = []
         for metric in metrics[:top_k]:
             matrix.append({
                 "skill": metric.name,

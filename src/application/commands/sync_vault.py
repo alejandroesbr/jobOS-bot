@@ -62,5 +62,7 @@ class SyncVaultResult:
     """
     created: int
     updated: int
-    hubs_updated: int
-    execution_time_ms: int
+    hubs_updated: int = 0
+    execution_time_ms: int = 0
+    total_applications: int = 0
+    vault_path: str = "vault"

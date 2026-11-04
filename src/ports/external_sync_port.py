@@ -45,6 +45,10 @@ class SyncReport:
     bootstrapped_from_notion: int = 0
     stalled_followups: int = 0
 
+    @property
+    def bootstrapped_from_external(self) -> int:
+        return self.bootstrapped_from_notion
+
 
 class ExternalSyncPort(ABC):
     """Abstract interface for optional external synchronization (e.g., Notion).
@@ -120,7 +124,7 @@ class ExternalSyncPort(ABC):
     def sync_applications(
         self,
         applications: list[ApplicationRecord],
-        config: FilterConfig,
+        config: Optional[FilterConfig] = None,
     ) -> SyncReport:
         """Sync a specific list of applications with external system.
 

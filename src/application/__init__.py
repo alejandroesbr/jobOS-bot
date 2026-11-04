@@ -13,6 +13,13 @@ from src.application.queries import (
     GetApplicationByIdQuery,
     GetApplicationByIdResult,
 )
+from src.application.handlers import (
+    ScanPortalsHandler,
+    SyncVaultHandler,
+    SyncExternalHandler,
+    GetApplicationsHandler,
+    GetApplicationByIdHandler,
+)
 
 __all__ = [
     # Commands
@@ -27,4 +34,10 @@ __all__ = [
     "GetApplicationsResult",
     "GetApplicationByIdQuery",
     "GetApplicationByIdResult",
+    # Handlers
+    "ScanPortalsHandler",
+    "SyncVaultHandler",
+    "SyncExternalHandler",
+    "GetApplicationsHandler",
+    "GetApplicationByIdHandler",
 ]

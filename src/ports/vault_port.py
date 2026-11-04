@@ -44,7 +44,7 @@ class KnowledgeVaultPort(ABC):
     def sync_applications(
         self,
         applications: list[ApplicationRecord],
-        vault_path: Path,
+        vault_path: Path | str | None = None,
     ) -> tuple[int, int]:
         """Synchronize all applications to the Obsidian vault.
 
@@ -76,7 +76,7 @@ class KnowledgeVaultPort(ABC):
     def sync_single_application(
         self,
         application: ApplicationRecord,
-        vault_path: Path,
+        vault_path: Path | str | None = None,
     ) -> Path:
         """Synchronize a single application to the vault.
 
@@ -107,7 +107,7 @@ class KnowledgeVaultPort(ABC):
     def create_hubs(
         self,
         applications: list[ApplicationRecord],
-        vault_path: Path,
+        vault_path: Path | str | None = None,
     ) -> int:
         """Create hub files for companies, skills, portals, and statuses.
 
@@ -137,7 +137,7 @@ class KnowledgeVaultPort(ABC):
     def rebuild_vault(
         self,
         applications: list[ApplicationRecord],
-        vault_path: Path,
+        vault_path: Path | str = "vault",
     ) -> tuple[int, int]:
         """Completely rebuild the vault from application data.
 

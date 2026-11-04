@@ -34,8 +34,8 @@ class SyncExternalCommand:
         ...     target="notion"
         ... )
     """
-    applications: list[ApplicationRecord]
-    config: FilterConfig
+    applications: Optional[list[ApplicationRecord]] = None
+    config: Optional[FilterConfig] = None
     target: str = "notion"  # "notion" or other future targets
 
 

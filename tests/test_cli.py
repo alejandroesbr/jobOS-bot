@@ -7,7 +7,6 @@ import pytest
 from cli import cli
 from src.adapters.db.repository import ApplicationRepository
 from src.domain.models import (
-    ApplicationStatus,
     JobOffer,
     KeywordMatch,
     KeywordWeight,
@@ -48,14 +47,66 @@ def populated_db_path(tmp_path: Path) -> str:
     return str(db_file)
 
 
-def test_cli_stats_command(populated_db_path: str) -> None:
+def test_cli_only_exposes_four_v2_commands() -> None:
     runner = CliRunner()
-    result = runner.invoke(cli, ["stats", "--db-path", populated_db_path])
+    result = runner.invoke(cli, ["--help"])
+    assert result.exit_code == 0
+    for active_cmd in ("scan", "sync", "auth", "export"):
+        assert active_cmd in result.output
+
+    # Obsolete v1 commands must not exist
+    for obsolete_cmd in ("stats", "assist", "tailor", "prep"):
+        res_obsolete = runner.invoke(cli, [obsolete_cmd])
+        assert res_obsolete.exit_code != 0
+
+
+def test_cli_scan_help_includes_v2_flags() -> None:
+    runner = CliRunner()
+    result = runner.invoke(cli, ["scan", "--help"])
+    assert result.exit_code == 0
+    assert "--portal" in result.output
+    assert "--limit" in result.output
+    assert "--headless" in result.output
+    assert "--workers" in result.output
+    assert "--vault-dir" in result.output
+
+
+def test_cli_sync_help_includes_v2_flags() -> None:
+    runner = CliRunner()
+    result = runner.invoke(cli, ["sync", "--help"])
+    assert result.exit_code == 0
+    assert "--vault-dir" in result.output
+    assert "--target" in result.output
+
+
+def test_cli_sync_obsidian_command(populated_db_path: str, tmp_path: Path) -> None:
+    runner = CliRunner()
+    vault_dir = tmp_path / "test_vault"
+    result = runner.invoke(
+        cli,
+        [
+            "sync",
+            "--db-path",
+            populated_db_path,
+            "--vault-dir",
+            str(vault_dir),
+            "--target",
+            "obsidian",
+        ],
+    )
 
     assert result.exit_code == 0
-    assert "jobOS-bot — Estadísticas y Radar de Mercado" in result.output
-    assert "Enviado" in result.output
-    assert "React" in result.output
+    assert (vault_dir / "applications").is_dir()
+    assert (vault_dir / "companies").is_dir()
+    assert (vault_dir / "skills").is_dir()
+    assert len(list((vault_dir / "applications").glob("*.md"))) == 1
+
+
+def test_cli_auth_help() -> None:
+    runner = CliRunner()
+    result = runner.invoke(cli, ["auth", "--help"])
+    assert result.exit_code == 0
+    assert "--output" in result.output
 
 
 def test_cli_export_json_command(populated_db_path: str, tmp_path: Path) -> None:
@@ -90,12 +141,3 @@ def test_cli_export_csv_command(populated_db_path: str, tmp_path: Path) -> None:
     content = out_file.read_text(encoding="utf-8")
     assert "Desarrollador React Junior" in content
     assert "TechCorp Latam" in content
-
-
-def test_cli_scan_help() -> None:
-    runner = CliRunner()
-    result = runner.invoke(cli, ["scan", "--help"])
-    assert result.exit_code == 0
-    assert "--portal" in result.output
-    assert "--limit" in result.output
-    assert "--headless" in result.output

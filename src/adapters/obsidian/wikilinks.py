@@ -56,7 +56,10 @@ def parse_wikilink(link: str) -> str | None:
         None
     """
     match = re.match(r"\[\[(.+?)\]\]", link)
-    return match.group(1) if match else None
+    if not match:
+        return None
+    inner = match.group(1)
+    return inner.split("|", 1)[0].strip()
 
 
 def format_wikilink_with_alias(text: str, alias: str) -> str:
@@ -103,11 +106,13 @@ def sanitize_for_filename(text: str) -> str:
         'Google-Cloud'
     """
     # Replace path separators and other problematic chars
+    text = text.replace("::", "_")
     text = text.replace("/", "-").replace("\\", "-")
     text = text.replace(":", "-").replace("*", "-")
     text = text.replace("?", "-").replace("\"", "-")
     text = text.replace("<", "-").replace(">", "-")
     text = text.replace("|", "-")
+    text = text.replace("#", "sharp").replace("+", "plus")
     # Collapse multiple dashes
     text = re.sub(r"-+", "-", text)
     return text.strip("-")
@@ -135,7 +140,8 @@ def slugify(text: str) -> str:
         'react-node-js'
     """
     text = text.lower()
-    text = re.sub(r"[^a-z0-9\s-]", "", text)
+    text = text.replace("#", "-sharp ").replace("+", "-plus ")
+    text = re.sub(r"[^a-z0-9\s-]", " ", text)
     text = re.sub(r"\s+", "-", text)
     text = re.sub(r"-+", "-", text)
     return text.strip("-")

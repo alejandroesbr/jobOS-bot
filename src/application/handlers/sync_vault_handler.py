@@ -10,6 +10,7 @@ The handler supports two modes:
 
 Both modes also create/update hub files for companies, skills, portals, and statuses.
 """
+from pathlib import Path
 import time
 from src.application.commands import SyncVaultCommand, SyncVaultResult
 from src.domain.models import ApplicationRecord
@@ -85,22 +86,23 @@ class SyncVaultHandler:
             >>> print(f"Full rebuild: {result.created} notes, {result.hubs_updated} hubs")
         """
         start_time = time.perf_counter()
+        vault_dir = Path(command.vault_path)
 
         if command.full_rebuild:
             created, updated = self._vault.rebuild_vault(
                 applications=command.applications,
-                vault_path=command.vault_path,
+                vault_path=vault_dir,
             )
         else:
             created, updated = self._vault.sync_applications(
                 applications=command.applications,
-                vault_path=command.vault_path,
+                vault_path=vault_dir,
             )
 
         # Create/update hubs
         hubs_updated = self._vault.create_hubs(
             applications=command.applications,
-            vault_path=command.vault_path,
+            vault_path=vault_dir,
         )
 
         execution_time_ms = int((time.perf_counter() - start_time) * 1000)
@@ -110,4 +112,6 @@ class SyncVaultHandler:
             updated=updated,
             hubs_updated=hubs_updated,
             execution_time_ms=execution_time_ms,
+            total_applications=len(command.applications),
+            vault_path=command.vault_path,
         )

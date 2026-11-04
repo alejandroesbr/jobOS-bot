@@ -2,6 +2,8 @@ import re
 import unicodedata
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
+from src.domain.models import WorkModality
+
 COMPANY_SUFFIX_PATTERN = re.compile(
     r"\b(?:s\.?a\.?s\.?|s\.?a\.?|ltda\.?|inc\.?|llc\.?|corp\.?|corporation|b\.?v\.?|gmbh|colombia|latam)\b",
     re.IGNORECASE,
@@ -12,12 +14,6 @@ TITLE_NOISE_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
-QUESTION_NOISE_PATTERN = re.compile(
-    r"\((?:obligatorio|required|opcional|optional)\)",
-    re.IGNORECASE,
-)
-
-NON_ALPHANUMERIC_PATTERN = re.compile(r"[^a-z0-9.\s]+")
 WHITESPACE_PATTERN = re.compile(r"\s+")
 
 TITLE_SYNONYMS: tuple[tuple[re.Pattern[str], str], ...] = (
@@ -102,13 +98,23 @@ def normalize_canonical_url(raw_url: str) -> str:
     return urlunsplit((scheme, netloc, path, query, ""))
 
 
-def normalize_form_question(raw_label: str) -> str:
-    if not raw_label:
-        return ""
-    text = strip_accents(raw_label).lower()
-    text = QUESTION_NOISE_PATTERN.sub(" ", text)
-    for pattern, replacement in TITLE_SYNONYMS:
-        text = pattern.sub(replacement, text)
-    text = NON_ALPHANUMERIC_PATTERN.sub(" ", text).replace(".", " ")
-    return collapse_whitespace(text)
+def detect_modality(text: str) -> WorkModality:
+    cleaned = strip_accents(text).lower()
+    if any(
+        phrase in cleaned
+        for phrase in (
+            "100% presencial",
+            "100 % presencial",
+            "no es remoto",
+            "no remoto",
+            "trabajo presencial",
+        )
+    ):
+        return WorkModality.ONSITE
+    if "hibrid" in cleaned or "hybrid" in cleaned:
+        return WorkModality.HYBRID
+    if "remot" in cleaned or "teletrabaj" in cleaned or "home office" in cleaned:
+        return WorkModality.REMOTE
+    return WorkModality.ONSITE
+
 

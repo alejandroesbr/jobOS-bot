@@ -4,12 +4,10 @@ services:
     volumes:
       - ./data:/app/data
       - ./config:/app/config:ro
-      - ./interviews:/app/interviews
-      - ./followups:/app/followups
+      - ./vault:/app/vault
       - ./exports:/app/exports
     environment:
-      - GEMINI_API_KEY=${GEMINI_API_KEY}
       - NOTION_TOKEN=${NOTION_TOKEN}
       - NOTION_DATABASE_ID=${NOTION_DATABASE_ID}
+      - VAULT_PATH=/app/vault
       - HEADLESS=true
-

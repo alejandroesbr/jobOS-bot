@@ -9,6 +9,7 @@ from src.adapters.scrapers.browser import human_delay, smooth_scroll
 from src.config_loader import FilterConfig
 from src.domain.models import JobOffer, PortalName, WorkModality
 from src.domain.text_normalizer import strip_accents
+from src.ports.scraper_port import PortalScraperPort
 
 if TYPE_CHECKING:
     pass
@@ -43,11 +44,15 @@ def detect_modality(text: str) -> WorkModality:
     return WorkModality.ONSITE
 
 
-class BasePortalScraper(ABC):
+class BasePortalScraper(PortalScraperPort):
     @property
     @abstractmethod
     def portal(self) -> PortalName:
         ...
+
+    @property
+    def portal_name(self) -> PortalName:
+        return self.portal
 
     @abstractmethod
     def build_search_urls(self, config: FilterConfig) -> list[str]:

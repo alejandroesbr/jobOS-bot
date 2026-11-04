@@ -11,14 +11,17 @@ Designed for O(n) average case with early exit on high-confidence matches.
 
 import re
 from dataclasses import dataclass
-from typing import Sequence
+from typing import Any, Sequence
 
 try:
-    from rapidfuzz import fuzz
+    from rapidfuzz import fuzz as _fuzz, utils as _utils
     RAPIDFUZZ_AVAILABLE = True
+    fuzz: Any = _fuzz
+    utils: Any = _utils
 except ImportError:
     RAPIDFUZZ_AVAILABLE = False
     fuzz = None
+    utils = None
 
 from src.domain.models import KeywordWeight
 from src.config_loader import TechVocabulary
@@ -38,7 +41,7 @@ class FuzzyMatchResult:
 @dataclass(frozen=True, slots=True)
 class TemplatePattern:
     """Pre-compiled template pattern for common skill variations."""
-    pattern: re.Pattern
+    pattern: re.Pattern[str]
     canonical: str
     weight: KeywordWeight
     confidence: float = 0.95  # High confidence for known patterns
@@ -50,8 +53,9 @@ class TemplatePattern:
 
 def build_exact_lookup(vocabulary: TechVocabulary) -> dict[str, tuple[str, KeywordWeight]]:
     """Build O(1) lookup from normalized keyword to (canonical, weight)."""
-    lookup = {}
-    for canonical, weight in vocabulary.get_all_keywords():
+    lookup: dict[str, tuple[str, KeywordWeight]] = {}
+    for canonical in vocabulary.get_all_keywords():
+        weight = vocabulary.get_weight(canonical)
         # Primary canonical form
         lookup[canonical.lower()] = (canonical, weight)
         # Also register all known aliases
@@ -146,13 +150,20 @@ def build_template_patterns(vocabulary: TechVocabulary) -> list[TemplatePattern]
         (r"^(?:event driven|event driven architecture)$", "event driven", KeywordWeight.BONUS, 0.85),
     ]
 
-    for pattern_str, canonical, weight, confidence in template_defs:
+    vocab_by_lower: dict[str, str] = {kw.lower(): kw for kw in vocabulary.get_all_keywords()}
+    for kw in vocabulary.get_all_keywords():
+        for alias in vocabulary.get_aliases(kw):
+            vocab_by_lower.setdefault(alias.lower(), kw)
+
+    for pattern_str, canonical, _default_weight, confidence in template_defs:
         # Only add if the canonical is in vocabulary
-        if canonical in vocabulary._aliases or canonical in vocabulary._canonical_weights:
+        matched_canonical = vocab_by_lower.get(canonical.lower())
+        if matched_canonical is not None:
+            actual_weight = vocabulary.get_weight(matched_canonical)
             patterns.append(TemplatePattern(
                 pattern=re.compile(pattern_str, re.IGNORECASE),
-                canonical=canonical,
-                weight=weight,
+                canonical=matched_canonical,
+                weight=actual_weight,
                 confidence=confidence,
             ))
 
@@ -194,7 +205,7 @@ def match_rapidfuzz(
     - Extra words: "react js developer" vs "react"
     - Partial matches: "postgresql database" vs "postgresql"
     """
-    if not RAPIDFUZZ_AVAILABLE:
+    if not RAPIDFUZZ_AVAILABLE or fuzz is None or utils is None:
         return None
 
     normalized = token.lower().strip()
@@ -204,17 +215,24 @@ def match_rapidfuzz(
     best_match: tuple[str, KeywordWeight, int] | None = None
     best_score = 0
 
-    for canonical, weight in vocabulary.get_all_keywords():
+    for canonical in vocabulary.get_all_keywords():
+        weight = vocabulary.get_weight(canonical)
         # Token set ratio handles word reordering and extra tokens
-        score = fuzz.token_set_ratio(normalized, canonical.lower())
-        if score >= threshold and score > best_score:
-            best_score = score
-            best_match = (canonical, weight, score)
+        score = fuzz.token_set_ratio(
+            normalized,
+            canonical.lower(),
+            processor=utils.default_process,
+            score_cutoff=threshold,
+        )
+        score_int = int(round(score))
+        if score_int >= threshold and score_int > best_score:
+            best_score = score_int
+            best_match = (canonical, weight, score_int)
 
     if best_match:
-        canonical, weight, score = best_match
+        canonical, weight, score_int = best_match
         # Confidence scales with score: 85% -> 0.7, 100% -> 0.95
-        confidence = 0.5 + (score - 85) * 0.45 / 15
+        confidence = 0.5 + (score_int - 85) * 0.45 / 15
         return FuzzyMatchResult(
             matched=True,
             canonical_keyword=canonical,

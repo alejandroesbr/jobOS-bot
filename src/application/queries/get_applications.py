@@ -70,4 +70,6 @@ class GetApplicationsResult:
     """
     applications: list[ApplicationRecord]
     total_count: int
-    execution_time_ms: int
+    execution_time_ms: int = 0
+    limit: int = 50
+    offset: int = 0

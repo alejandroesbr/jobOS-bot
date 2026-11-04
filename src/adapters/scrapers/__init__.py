@@ -1,6 +1,5 @@
 """Scrapers package - Portal scraping adapters."""
 from src.adapters.scrapers.orchestrator import (
-    ScraperOrchestrator,
     MultiWorkerScraperOrchestrator,
     PortalScanResult,
     WorkerResult,
@@ -18,7 +17,6 @@ from src.adapters.scrapers.browser import create_browser_session, human_delay, s
 
 __all__ = [
     # Orchestrators
-    "ScraperOrchestrator",
     "MultiWorkerScraperOrchestrator",
     "PortalScanResult",
     "WorkerResult",

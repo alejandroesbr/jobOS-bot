@@ -11,10 +11,14 @@ from src.adapters.scrapers.getonbrd import GetOnBrdScraper
 from src.adapters.scrapers.glassdoor import GlassdoorScraper
 from src.adapters.scrapers.indeed import IndeedScraper
 from src.adapters.scrapers.linkedin import LinkedInScraper
-from src.adapters.scrapers.orchestrator import ScraperOrchestrator
+from src.adapters.scrapers.orchestrator import (
+    MultiWorkerScraperOrchestrator,
+    PortalScanResult,
+)
+from src.application.commands import ScanPortalsCommand
+from src.application.handlers import ScanPortalsHandler
 from src.config_loader import FilterConfig, load_filter_config
 from src.domain.models import JobOffer, PortalName, WorkModality
-from src.services.scan_service import ScanService
 
 
 @pytest.fixture
@@ -77,7 +81,7 @@ def test_scraper_card_pre_filtering_rejects_blacklist(filter_config: FilterConfi
 
 
 def test_orchestrator_contains_all_six_portal_adapters() -> None:
-    orchestrator = ScraperOrchestrator()
+    orchestrator = MultiWorkerScraperOrchestrator()
     assert len(orchestrator.registry) == 6
     assert orchestrator.registry[PortalName.LINKEDIN] is LinkedInScraper
     assert orchestrator.registry[PortalName.GETONBRD] is GetOnBrdScraper
@@ -93,21 +97,25 @@ def test_orchestrator_handles_missing_or_failing_scraper_gracefully(filter_confi
     failing_instance = failing_scraper_cls.return_value
     failing_instance.scan.side_effect = RuntimeError("Cloudflare challenge block")
 
-    orchestrator = ScraperOrchestrator(
+    orchestrator = MultiWorkerScraperOrchestrator(
         registry={
             PortalName.GETONBRD: failing_scraper_cls,
-        }
+        },
+        default_retries=0,
     )
 
     # Mock the browser session so we don't open a real browser
     mock_context = MagicMock()
     mock_page = MagicMock()
     mock_context.new_page.return_value = mock_page
+    mock_session = MagicMock()
+    mock_session.__enter__.return_value = mock_context
+    mock_session.__exit__.return_value = False
 
     with pytest.MonkeyPatch.context() as mp:
         mp.setattr(
             "src.adapters.scrapers.orchestrator.create_browser_session",
-            MagicMock(return_value=MagicMock(__enter__=MagicMock(return_value=mock_context), __exit__=MagicMock())),
+            MagicMock(return_value=mock_session),
         )
         results = orchestrator.run_scan([PortalName.GETONBRD], filter_config)
 
@@ -117,7 +125,7 @@ def test_orchestrator_handles_missing_or_failing_scraper_gracefully(filter_confi
     assert "Cloudflare challenge block" in str(result.error_message)
 
 
-def test_scan_service_end_to_end_flow_with_mocked_orchestrator(
+def test_scan_portals_handler_end_to_end_flow_with_mocked_orchestrator(
     repo: ApplicationRepository,
     filter_config: FilterConfig,
 ) -> None:
@@ -140,18 +148,21 @@ def test_scan_service_end_to_end_flow_with_mocked_orchestrator(
         description="C# y .NET",
     )
 
-    mock_orch = MagicMock(spec=ScraperOrchestrator)
-    from src.adapters.scrapers.orchestrator import PortalScanResult
-
-    mock_orch.run_scan.return_value = {
+    mock_orch = MagicMock(spec=MultiWorkerScraperOrchestrator)
+    mock_orch.scan_all.return_value = {
         PortalName.GETONBRD: PortalScanResult(
             portal=PortalName.GETONBRD,
             offers=(offer_good, offer_hard_reject),
         )
     }
 
-    service = ScanService(repository=repo, config=filter_config, orchestrator=mock_orch)
-    summary = service.run_scan_pipeline(portals=[PortalName.GETONBRD])
+    handler = ScanPortalsHandler(repository=repo, scraper=mock_orch, vault=None)
+    command = ScanPortalsCommand(
+        portals=[PortalName.GETONBRD],
+        sync_obsidian=False,
+        config=filter_config,
+    )
+    summary = handler.handle(command)
 
     assert summary.total_scanned == 2
     assert summary.total_matched == 1

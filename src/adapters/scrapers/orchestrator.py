@@ -1,22 +1,10 @@
-"""Scraper Orchestrators - Sequential (v1) and Multi-Worker Concurrent (v2).
+"""Multi-Worker Concurrent Scraper Orchestrator (v2.0).
 
-This module provides two orchestrator implementations for coordinating job portal scrapers:
-
-1. **ScraperOrchestrator (Legacy)**: Sequential single-thread execution
-   - Uses a single shared browser context
-   - Processes portals one at a time
-   - Lower resource usage, slower total time
-   - Kept for backward compatibility
-
-2. **MultiWorkerScraperOrchestrator (v2.0)**: Concurrent multi-thread execution
-   - Each worker gets isolated Playwright BrowserContext
-   - Processes portals in parallel using ThreadPoolExecutor
-   - Higher resource usage, significantly faster total time
-   - Built-in retry logic with exponential backoff
-   - Error isolation (one portal failure doesn't affect others)
-
-Both orchestrators use the same portal registry and produce compatible
-PortalScanResult/WorkerResult objects for downstream processing.
+This module provides the concurrent multi-worker orchestrator for coordinating job portal scrapers:
+- Each worker gets isolated Playwright BrowserContext
+- Processes portals in parallel using ThreadPoolExecutor
+- Built-in retry logic with exponential backoff
+- Error isolation (one portal failure doesn't affect others)
 """
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
@@ -27,7 +15,7 @@ from typing import Callable, Optional, Type
 
 from playwright.sync_api import Page
 
-from src.adapters.scrapers.base import BasePortalScraper, RawJobCard
+from src.adapters.scrapers.base import BasePortalScraper, RawJobCard, detect_modality
 from src.adapters.scrapers.browser import create_browser_session, human_delay, smooth_scroll
 from src.adapters.scrapers.computrabajo import ComputrabajoScraper
 from src.adapters.scrapers.elempleo import ElempleoScraper
@@ -37,7 +25,7 @@ from src.adapters.scrapers.indeed import IndeedScraper
 from src.adapters.scrapers.linkedin import LinkedInScraper
 from src.config_loader import FilterConfig
 from src.domain.models import JobOffer, PortalName, WorkModality
-from src.domain.text_normalizer import detect_modality
+from src.ports.scraper_port import MultiPortalScraperPort, PortalScanResult as PortalScanResult
 
 logger = logging.getLogger(__name__)
 
@@ -51,159 +39,8 @@ DEFAULT_PORTAL_REGISTRY: dict[PortalName, Type[BasePortalScraper]] = {
 }
 
 
-@dataclass(frozen=True, slots=True)
-class PortalScanResult:
-    """Result of scanning a single portal (legacy sequential).
-
-    Immutable data class containing the outcome of a portal scan operation
-    using the legacy sequential orchestrator.
-
-    Attributes:
-        portal: The portal that was scanned
-        offers: Tuple of JobOffer objects found (empty if error or no matches)
-        error_message: Error description if scan failed, None if successful
-
-    Example:
-        >>> result = PortalScanResult(
-        ...     portal=PortalName.LINKEDIN,
-        ...     offers=(offer1, offer2),
-        ...     error_message=None
-        ... )
-    """
-    portal: PortalName
-    offers: tuple[JobOffer, ...] = ()
-    error_message: str | None = None
-
-
 # ============================================================================
-# LEGACY: Sequential Single-Thread Orchestrator (kept for backward compatibility)
-# ============================================================================
-
-class ScraperOrchestrator:
-    """
-    Legacy sequential single-thread orchestrator.
-
-    Kept for backward compatibility. New code should use MultiWorkerScraperOrchestrator.
-
-    This orchestrator uses a single browser context shared across all portals,
-    processing them sequentially. While simpler and using fewer resources,
-    it's significantly slower for multi-portal scans.
-
-    Attributes:
-        registry: Dictionary mapping PortalName to scraper class
-
-    Example:
-        >>> orchestrator = ScraperOrchestrator()
-        >>> results = orchestrator.run_scan(
-        ...     portals=[PortalName.LINKEDIN, PortalName.GETONBRD],
-        ...     config=config,
-        ...     headless=True,
-        ...     limit_per_portal=15
-        ... )
-    """
-
-    def __init__(
-        self,
-        registry: dict[PortalName, Type[BasePortalScraper]] | None = None,
-    ) -> None:
-        """Initialize the orchestrator with a portal registry.
-
-        Args:
-            registry: Optional custom registry mapping PortalName to scraper classes.
-                Defaults to DEFAULT_PORTAL_REGISTRY with all supported portals.
-
-        Example:
-            >>> # Use default registry (all portals)
-            >>> orchestrator = ScraperOrchestrator()
-            >>>
-            >>> # Custom registry with only specific portals
-            >>> custom_registry = {PortalName.LINKEDIN: LinkedInScraper}
-            >>> orchestrator = ScraperOrchestrator(custom_registry)
-        """
-        self.registry = registry if registry is not None else dict(DEFAULT_PORTAL_REGISTRY)
-
-    def run_scan(
-        self,
-        portals: list[PortalName],
-        config: FilterConfig,
-        headless: bool = True,
-        limit_per_portal: int = 15,
-        on_offer_callback: Callable[[JobOffer], None] | None = None,
-    ) -> dict[PortalName, PortalScanResult]:
-        """Run sequential scan across multiple portals.
-
-        Opens a single browser context and processes each portal in sequence.
-        If a portal fails, logs the error and continues with the next portal.
-
-        Args:
-            portals: List of portals to scan in order
-            config: Filter configuration for search criteria
-            headless: Run browser in headless mode (default: True)
-            limit_per_portal: Maximum offers to collect per portal (default: 15)
-            on_offer_callback: Optional callback for each offer found during scan
-
-        Returns:
-            Dictionary mapping PortalName to PortalScanResult
-
-        Example:
-            >>> orchestrator = ScraperOrchestrator()
-            >>> results = orchestrator.run_scan(
-            ...     portals=[PortalName.LINKEDIN, PortalName.GETONBRD],
-            ...     config=config,
-            ...     headless=False,
-            ...     limit_per_portal=20
-            ... )
-            >>> for portal, result in results.items():
-            ...     print(f"{portal.value}: {len(result.offers)} offers")
-        """
-        results: dict[PortalName, PortalScanResult] = {}
-
-        storage_path = Path('data/storage_state.json') if Path('data/storage_state.json').is_file() else None
-        with create_browser_session(headless=headless, storage_state_path=storage_path) as context:
-            page: Page = context.new_page()
-
-            for portal_name in portals:
-                scraper_cls = self.registry.get(portal_name)
-                if not scraper_cls:
-                    logger.warning(f"No scraper registered for portal: {portal_name}")
-                    results[portal_name] = PortalScanResult(
-                        portal=portal_name,
-                        offers=(),
-                        error_message=f"No scraper implementation registered for {portal_name.value}",
-                    )
-                    continue
-
-                scraper = scraper_cls()
-                logger.info(f"Starting sequential single-thread scan on [{portal_name.value}]...")
-
-                try:
-                    raw_offers = scraper.scan(page, config, limit=limit_per_portal)
-                    if on_offer_callback:
-                        for offer in raw_offers:
-                            on_offer_callback(offer)
-
-                    results[portal_name] = PortalScanResult(
-                        portal=portal_name,
-                        offers=tuple(raw_offers),
-                        error_message=None,
-                    )
-                    logger.info(f"[{portal_name.value}] Finished: {len(raw_offers)} offers collected.")
-
-                except Exception as ex:
-                    logger.error(f"[{portal_name.value}] Scraper failed gracefully: {ex}", exc_info=True)
-                    results[portal_name] = PortalScanResult(
-                        portal=portal_name,
-                        offers=(),
-                        error_message=str(ex),
-                    )
-
-            page.close()
-
-        return results
-
-
-# ============================================================================
-# NEW v2.0: Multi-Worker Concurrent Orchestrator
+# v2.0: Multi-Worker Concurrent Orchestrator
 # ============================================================================
 
 @dataclass(frozen=True, slots=True)
@@ -243,35 +80,11 @@ class WorkerConfig:
     max_retries: int = 2
 
 
-@dataclass(frozen=True, slots=True)
-class WorkerResult:
-    """Result from a single worker.
-
-    Immutable data class containing the outcome of a worker's portal scan.
-    Includes timing information for performance monitoring.
-
-    Attributes:
-        portal: The portal that was scanned
-        offers: Tuple of JobOffer objects found
-        error_message: Error description if scan failed, None if successful
-        execution_time_ms: Total execution time in milliseconds
-
-    Example:
-        >>> result = WorkerResult(
-        ...     portal=PortalName.LINKEDIN,
-        ...     offers=(offer1, offer2),
-        ...     error_message=None,
-        ...     execution_time_ms=45230
-        ... )
-        >>> print(f"Completed in {result.execution_time_ms/1000:.1f}s")
-    """
-    portal: PortalName
-    offers: tuple[JobOffer, ...] = ()
-    error_message: Optional[str] = None
-    execution_time_ms: int = 0
+# WorkerResult is an alias/compatible with PortalScanResult
+WorkerResult = PortalScanResult
 
 
-class MultiWorkerScraperOrchestrator:
+class MultiWorkerScraperOrchestrator(MultiPortalScraperPort):
     """
     Concurrent scraper orchestrator using ThreadPoolExecutor.
 
@@ -347,6 +160,28 @@ class MultiWorkerScraperOrchestrator:
         self.default_timeout = default_timeout
         self.default_retries = default_retries
 
+    def scan_all(
+        self,
+        portals: list[PortalName],
+        config: FilterConfig,
+        limit_per_portal: int = 15,
+        max_workers: int = 4,
+        headless: bool = True,
+    ) -> dict[PortalName, PortalScanResult]:
+        """Scan multiple portals concurrently (MultiPortalScraperPort contract)."""
+        prev_workers = self.max_workers
+        try:
+            if max_workers >= 1:
+                self.max_workers = max_workers
+            return self.run_scan(
+                portals=portals,
+                config=config,
+                headless=headless,
+                limit_per_portal=limit_per_portal,
+            )
+        finally:
+            self.max_workers = prev_workers
+
     def run_scan(
         self,
         portals: list[PortalName],
@@ -414,16 +249,17 @@ class MultiWorkerScraperOrchestrator:
 
         with ThreadPoolExecutor(max_workers=actual_workers) as executor:
             # Submit all workers
-            future_to_portal = {
-                executor.submit(self._run_worker, wc): wc.portal
+            future_to_wc = {
+                executor.submit(self._run_worker, wc): wc
                 for wc in worker_configs
             }
 
-            # Collect results as they complete
-            for future in as_completed(future_to_portal):
-                portal = future_to_portal[future]
+            # Collect results as they complete with timeout_seconds
+            for future in as_completed(future_to_wc):
+                wc = future_to_wc[future]
+                portal = wc.portal
                 try:
-                    result = future.result()
+                    result = future.result(timeout=wc.timeout_seconds)
                     results[portal] = result
                     logger.info(
                         f"[{portal.value}] Worker completed: "
@@ -515,82 +351,5 @@ class MultiWorkerScraperOrchestrator:
         config: FilterConfig,
         limit: int,
     ) -> list[JobOffer]:
-        """Execute scan logic within a worker's isolated page context.
-
-        Performs the complete scraping workflow for a single portal:
-        1. Build search URLs from filter config
-        2. Navigate to each search URL
-        3. Extract job cards from listing pages
-        4. Pre-filter cards (seniority, location, keywords)
-        5. Extract full descriptions for passing cards
-        6. Create JobOffer objects
-
-        Args:
-            scraper: Portal-specific scraper instance
-            page: Isolated Playwright page for this worker
-            config: Filter configuration
-            limit: Maximum offers to collect
-
-        Returns:
-            List of JobOffer objects (up to limit)
-        """
-        search_urls = scraper.build_search_urls(config)
-        collected_offers: list[JobOffer] = []
-        seen_urls: set[str] = set()
-
-        for search_url in search_urls:
-            if len(collected_offers) >= limit:
-                break
-
-            try:
-                page.goto(search_url, wait_until="domcontentloaded", timeout=30000)
-                human_delay(1.5, 3.0)
-                smooth_scroll(page, steps=2)
-            except Exception as ex:
-                logger.warning(f"[{scraper.portal.value}] Failed loading {search_url}: {ex}")
-                continue
-
-            try:
-                cards = scraper.extract_cards(page)
-            except Exception as ex:
-                logger.warning(f"[{scraper.portal.value}] Error extracting cards: {ex}")
-                continue
-
-            for card in cards:
-                if len(collected_offers) >= limit:
-                    break
-
-                if card.url in seen_urls:
-                    continue
-                seen_urls.add(card.url)
-
-                # Pre-filter
-                allowed, reason = scraper.pre_filter_card(card, config)
-                if not allowed:
-                    logger.debug(f"[{scraper.portal.value}] Pre-filtered: {reason}")
-                    continue
-
-                # Extract description
-                try:
-                    description = scraper.extract_description(page, card.url)
-                    human_delay(1.0, 2.0)
-                except Exception as ex:
-                    logger.warning(f"[{scraper.portal.value}] Failed detail extraction: {ex}")
-                    description = ""
-
-                combined_text = f"{card.title} {card.location} {description}"
-                modality = detect_modality(combined_text)
-
-                offer = JobOffer(
-                    portal=scraper.portal,
-                    title=card.title,
-                    company=card.company,
-                    location=card.location,
-                    modality=modality,
-                    url=card.url,
-                    description=description,
-                    external_id=card.external_id,
-                )
-                collected_offers.append(offer)
-
-        return collected_offers
+        """Execute scan logic within a worker's isolated page context."""
+        return scraper.scan(page, config, limit=limit)

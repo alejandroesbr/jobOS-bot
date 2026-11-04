@@ -97,13 +97,16 @@ class GetApplicationsHandler:
             except ValueError:
                 status = None
 
-        # Fetch applications
+        # Fetch applications with generous limit for filtering and pagination
+        fetch_limit = max(query.limit + query.offset, 500)
         applications = self._repository.find_all(
             status=status,
-            limit=query.limit,
+            min_match=query.min_match_score,
+            keyword=query.keyword,
+            limit=fetch_limit,
         )
 
-        # Apply additional filters
+        # Apply additional in-memory filters
         if query.min_match_score is not None:
             applications = [a for a in applications if a.match_score >= query.min_match_score]
 
@@ -113,12 +116,13 @@ class GetApplicationsHandler:
                 a for a in applications
                 if kw_lower in a.title.lower()
                 or kw_lower in a.company.lower()
+                or kw_lower in a.description.lower()
                 or any(kw_lower in k.keyword.lower() for k in a.keywords)
             ]
 
         # Apply pagination
         total_count = len(applications)
-        paginated = applications[query.offset:query.offset + query.limit]
+        paginated = applications[query.offset : query.offset + query.limit]
 
         execution_time_ms = int((time.perf_counter() - start_time) * 1000)
 
@@ -126,4 +130,6 @@ class GetApplicationsHandler:
             applications=paginated,
             total_count=total_count,
             execution_time_ms=execution_time_ms,
+            limit=query.limit,
+            offset=query.offset,
         )

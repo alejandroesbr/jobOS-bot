@@ -9,9 +9,10 @@ from dotenv import load_dotenv
 load_dotenv()
 
 import json
+import os
 import sys
 from pathlib import Path
-from typing import Optional
+from typing import Optional, cast
 
 import click
 from rich.console import Console
@@ -73,6 +74,29 @@ def print_info(message: str) -> None:
     console.print(f"[cyan]ℹ {message}[/cyan]")
 
 
+def _resolve_obsidian_vault_path(vault_path: str | None) -> str:
+    """Resolve external Obsidian vault path from CLI option or .env (OBSIDIAN_VAULT_PATH / VAULT_PATH)."""
+    raw = (
+        (vault_path or "").strip()
+        or os.getenv("OBSIDIAN_VAULT_PATH", "").strip()
+        or os.getenv("VAULT_PATH", "").strip()
+    )
+    if not raw:
+        raise ValueError(
+            "Ruta del Vault de Obsidian no configurada. "
+            "Pasa '--vault-dir /ruta/a/tu/boveda' o define OBSIDIAN_VAULT_PATH=/ruta/a/tu/boveda en .env"
+        )
+    resolved = Path(raw).expanduser().resolve()
+    project_root = Path(__file__).parent.resolve()
+    if resolved == project_root or project_root in resolved.parents:
+        raise ValueError(
+            f"El Vault de Obsidian debe estar en una ruta externa fuera de este proyecto (recibido: '{resolved}'). "
+            "Indica la ruta donde tienes tu bóveda de Obsidian con '--vault-dir /ruta/a/tu/obsidian' o en .env (OBSIDIAN_VAULT_PATH)."
+        )
+    return str(resolved)
+
+
+
 @click.group()
 def cli() -> None:
     """jobOS-bot v2.0 — Concurrent Multi-Worker Intelligence Engine with Local Graph Database.
@@ -122,7 +146,9 @@ def cli() -> None:
     help="Ruta al archivo SQLite local.",
 )
 @click.option(
+    "--vault-dir",
     "--vault-path",
+    "vault_path",
     default="vault",
     help="Ruta al vault de Obsidian.",
 )
@@ -132,11 +158,6 @@ def cli() -> None:
     default=False,
     help="Desactivar sincronización con Obsidian vault.",
 )
-@click.option(
-    "--schema-v2/--schema-v1",
-    default=True,
-    help="Usar schema v2.0 con índices compuestos y tablas de métricas.",
-)
 def scan_cmd(
     portal_arg: str,
     limit_arg: int,
@@ -145,7 +166,6 @@ def scan_cmd(
     db_path: str,
     vault_path: str,
     no_obsidian: bool,
-    schema_v2: bool,
 ) -> None:
     """Escaneo multi-worker concurrente con aislamiento de BrowserContext y sync a Obsidian."""
     print_banner(
@@ -171,17 +191,17 @@ def scan_cmd(
 
     # Initialize dependencies
     try:
-        # Repository with schema v2.0 if requested
         repo = ApplicationRepository(db_path)
-        if schema_v2:
-            _initialize_schema_v2(repo)
 
         config = load_filter_config()
 
         # Multi-worker orchestrator
-        orchestrator: MultiPortalScraperPort = MultiWorkerScraperOrchestrator(
-            registry=DEFAULT_PORTAL_REGISTRY,
-            max_workers=max_workers,
+        orchestrator: MultiPortalScraperPort = cast(
+            MultiPortalScraperPort,
+            MultiWorkerScraperOrchestrator(
+                registry=DEFAULT_PORTAL_REGISTRY,
+                max_workers=max_workers,
+            ),
         )
 
         # Vault adapter (optional)
@@ -221,17 +241,6 @@ def scan_cmd(
             pass
 
 
-def _initialize_schema_v2(repo: ApplicationRepository) -> None:
-    """Initialize schema v2.0 with composite indexes and new tables."""
-    schema_path = Path(__file__).parent / "src" / "adapters" / "db" / "schema_v2.sql"
-    if schema_path.is_file():
-        sql = schema_path.read_text(encoding="utf-8")
-        repo._conn.executescript(sql)
-        print_info("Schema v2.0 inicializado (índices compuestos, tablas métricas, triggers)")
-    else:
-        print_warning("schema_v2.sql no encontrado, usando schema v1")
-
-
 def _print_scan_summary(result: ScanPortalsResult) -> None:
     """Print formatted scan summary."""
     console.print()
@@ -269,51 +278,113 @@ def _print_scan_summary(result: ScanPortalsResult) -> None:
     help="Ruta al archivo SQLite local.",
 )
 @click.option(
+    "--vault-dir",
     "--vault-path",
+    "vault_path",
     default="vault",
     help="Ruta al vault de Obsidian.",
+)
+@click.option(
+    "--target",
+    type=click.Choice(["obsidian", "notion"], case_sensitive=False),
+    default="obsidian",
+    help="Destino de sincronización: obsidian (por defecto) o notion (secundario).",
 )
 @click.option(
     "--rebuild/--incremental",
     default=False,
     help="Reconstruir vault completo (borra notas existentes) o sync incremental.",
 )
-def sync_cmd(db_path: str, vault_path: str, rebuild: bool) -> None:
-    """Sincroniza base de datos SQLite con vault Obsidian (Graphify-compatible)."""
+def sync_cmd(db_path: str, vault_path: str, target: str, rebuild: bool) -> None:
+    """Sincroniza base de datos SQLite con vault Obsidian (Graphify-compatible) o Notion."""
+    target_norm = target.strip().lower()
     action = "REBUILD completo" if rebuild else "INCREMENTAL"
     print_banner(
-        f"jobOS-bot v2.0 — Sync Obsidian Vault ({action})",
-        f"DB: {db_path} | Vault: {vault_path}"
+        f"jobOS-bot v2.0 — Sync {target_norm.capitalize()} ({action})",
+        f"DB: {db_path} | Target: {target_norm} | Vault: {vault_path}"
     )
 
     try:
         repo = ApplicationRepository(db_path)
-        vault = ObsidianVaultAdapter(vault_path)
-
-        # Get all applications
         applications = repo.find_all(limit=10000)
 
-        if rebuild:
-            command = SyncVaultCommand(
+        if target_norm == "notion":
+            from src.adapters.notion.notion_client import NotionClient
+            from src.config_loader import FilterConfig
+            from src.domain.models import ApplicationRecord
+            from src.ports.external_sync_port import ExternalSyncPort, SyncReport
+
+            class _NotionExternalSyncAdapter(ExternalSyncPort):
+                def __init__(self, client: NotionClient, repository: ApplicationRepository) -> None:
+                    self._client = client
+                    self._repo = repository
+
+                @property
+                def is_configured(self) -> bool:
+                    return self._client.is_configured
+
+                def sync(self) -> SyncReport:
+                    apps = self._repo.find_all(limit=10000)
+                    return self.sync_applications(apps, load_filter_config())
+
+                def sync_applications(
+                    self,
+                    applications: list[ApplicationRecord],
+                    config: FilterConfig | None = None,
+                ) -> SyncReport:
+                    if not self._client.is_configured:
+                        return SyncReport()
+                    pushed = 0
+                    updated = 0
+                    for app in applications:
+                        if app.notion_page_id:
+                            if self._client.update_application(app.notion_page_id, app):
+                                updated += 1
+                        else:
+                            page_id = self._client.push_application(app)
+                            if page_id and app.id is not None:
+                                self._repo.update_notion_page_id(app.id, page_id)
+                                pushed += 1
+                    bootstrapped = self._client.bootstrap_to_repository(self._repo)
+                    return SyncReport(
+                        pushed_new=pushed,
+                        updated_existing=updated,
+                        bootstrapped_from_notion=bootstrapped,
+                    )
+
+            notion_client = NotionClient()
+            ext_adapter = _NotionExternalSyncAdapter(notion_client, repo)
+            ext_command = SyncExternalCommand(
                 applications=applications,
-                vault_path=vault_path,
-                full_rebuild=True,
+                config=load_filter_config(),
+                target="notion",
             )
+            ext_handler = SyncExternalHandler(external_sync=ext_adapter, repository=repo)
+            ext_result: SyncExternalResult = ext_handler.handle(ext_command)
+            print_success(
+                f"Notion sincronizado: {ext_result.pushed_new} nuevas, "
+                f"{ext_result.updated_existing} actualizadas, "
+                f"{ext_result.bootstrapped_from_external} importadas"
+            )
+            console.print(f"[dim]Tiempo: {ext_result.execution_time_ms}ms[/dim]")
         else:
+            vault = ObsidianVaultAdapter(vault_path)
             command = SyncVaultCommand(
                 applications=applications,
                 vault_path=vault_path,
-                full_rebuild=False,
+                full_rebuild=rebuild,
             )
+            handler = SyncVaultHandler(vault=vault)
+            result: SyncVaultResult = handler.handle(command)
 
-        handler = SyncVaultHandler(vault=vault)
-        result: SyncVaultResult = handler.handle(command)
-
-        print_success(f"Vault sincronizado: {result.created} creadas, {result.updated} actualizadas, {result.hubs_updated} hubs")
-        console.print(f"[dim]Tiempo: {result.execution_time_ms}ms[/dim]")
+            print_success(
+                f"Vault sincronizado: {result.created} creadas, "
+                f"{result.updated} actualizadas, {result.hubs_updated} hubs"
+            )
+            console.print(f"[dim]Tiempo: {result.execution_time_ms}ms[/dim]")
 
     except Exception as ex:
-        print_error(f"Error sincronizando vault: {ex}")
+        print_error(f"Error sincronizando: {ex}")
         sys.exit(1)
     finally:
         try:

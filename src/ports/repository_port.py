@@ -229,57 +229,6 @@ class ApplicationRepositoryPort(ABC):
         ...
 
     @abstractmethod
-    def upsert_qa_memory(
-        self,
-        question_norm: str,
-        raw_example: str,
-        answer: str,
-    ) -> None:
-        """Upsert a question-answer pair into the QA memory.
-
-        Stores normalized question patterns with example raw questions and
-        generated answers for form autocompletion assistance. Uses
-        question_norm as the deduplication key.
-
-        Args:
-            question_norm: Normalized question pattern (lowercase, stripped,
-                punctuation removed, e.g., "what is your experience with react")
-            raw_example: Original raw question text from a form
-            answer: Generated or user-provided answer to store
-
-        Raises:
-            RepositoryError: If database operation fails
-            ValueError: If any argument is empty or None
-
-        Example:
-            >>> repo.upsert_qa_memory(
-            ...     question_norm="what is your experience with react",
-            ...     raw_example="¿Cuál es tu experiencia con React?",
-            ...     answer="3 years building production React applications..."
-            ... )
-        """
-        ...
-
-    @abstractmethod
-    def get_all_qa_memory(self) -> list[tuple[str, str, str, str]]:
-        """Get all QA memory entries: (question_norm, raw_example, answer, category).
-
-        Retrieves all stored question-answer pairs for use in form autocompletion.
-
-        Returns:
-            List of tuples: (question_norm, raw_example, answer, category)
-
-        Raises:
-            RepositoryError: If database operation fails
-
-        Example:
-            >>> qa_pairs = repo.get_all_qa_memory()
-            >>> for norm, raw, ans, cat in qa_pairs:
-            ...     print(f"Q: {raw} -> A: {ans[:50]}...")
-        """
-        ...
-
-    @abstractmethod
     def close(self) -> None:
         """Close the repository connection.
 

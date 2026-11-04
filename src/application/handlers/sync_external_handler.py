@@ -14,8 +14,10 @@ ExternalSyncPort implementation, which handles:
 """
 import time
 from src.application.commands import SyncExternalCommand, SyncExternalResult
+from src.config_loader import load_filter_config
 from src.domain.models import ApplicationRecord
 from src.ports.external_sync_port import ExternalSyncPort
+from src.ports.repository_port import ApplicationRepositoryPort
 
 
 class SyncExternalHandler:
@@ -47,16 +49,22 @@ class SyncExternalHandler:
         >>> print(f"Pushed: {result.pushed_new}, Pulled: {result.pulled_statuses}")
     """
 
-    def __init__(self, external_sync: ExternalSyncPort) -> None:
+    def __init__(
+        self,
+        external_sync: ExternalSyncPort,
+        repository: ApplicationRepositoryPort | None = None,
+    ) -> None:
         """Initialize the handler with external sync dependency.
 
         Args:
             external_sync: ExternalSyncPort implementation for external API operations
+            repository: Optional ApplicationRepositoryPort to load applications when not in command
 
         Example:
             >>> handler = SyncExternalHandler(NotionSyncAdapter(token="...", db_id="..."))
         """
         self._external_sync = external_sync
+        self._repository = repository
 
     def handle(self, command: SyncExternalCommand) -> SyncExternalResult:
         """Execute the sync external command.
@@ -92,10 +100,21 @@ class SyncExternalHandler:
         start_time = time.perf_counter()
 
         # Delegate to external sync adapter
-        result = self._external_sync.sync_applications(
-            applications=command.applications,
-            config=command.config,
-        )
+        if command.applications is not None:
+            config = command.config if command.config is not None else load_filter_config()
+            result = self._external_sync.sync_applications(
+                applications=command.applications,
+                config=config,
+            )
+        elif self._repository is not None:
+            config = command.config if command.config is not None else load_filter_config()
+            applications = self._repository.find_all(limit=10000)
+            result = self._external_sync.sync_applications(
+                applications=applications,
+                config=config,
+            )
+        else:
+            result = self._external_sync.sync()
 
         execution_time_ms = int((time.perf_counter() - start_time) * 1000)
 
@@ -105,6 +124,6 @@ class SyncExternalHandler:
             pulled_statuses=result.pulled_statuses,
             interview_preps_triggered=result.interview_preps_triggered,
             stalled_followups=result.stalled_followups,
-            bootstrapped_from_external=result.bootstrapped_from_external,
+            bootstrapped_from_external=result.bootstrapped_from_notion,
             execution_time_ms=execution_time_ms,
         )

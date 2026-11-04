@@ -43,6 +43,8 @@ from src.adapters.obsidian.hubs import (
     build_status_index,
     create_company_hubs,
     create_skill_hubs,
+    create_portal_hubs,
+    create_status_hubs,
 )
 from src.adapters.obsidian.wikilinks import sanitize_for_filename
 
@@ -73,7 +75,7 @@ class ObsidianVaultAdapter(KnowledgeVaultPort):
         >>> print(f"Synced: {created} new, {updated} updated")
     """
 
-    def __init__(self, vault_path: str = "vault") -> None:
+    def __init__(self, vault_path: Path | str = "vault") -> None:
         """Initialize the adapter with a vault path.
 
         Args:
@@ -85,7 +87,7 @@ class ObsidianVaultAdapter(KnowledgeVaultPort):
             >>> adapter = ObsidianVaultAdapter("~/vaults/job-search")
             >>> adapter = ObsidianVaultAdapter("/absolute/path/to/vault")
         """
-        self.vault_path = Path(vault_path)
+        self.vault_path = Path(vault_path).expanduser()
         self.applications_dir = self.vault_path / "applications"
         self.companies_dir = self.vault_path / "companies"
         self.skills_dir = self.vault_path / "skills"
@@ -95,7 +97,7 @@ class ObsidianVaultAdapter(KnowledgeVaultPort):
     def sync_applications(
         self,
         applications: list[ApplicationRecord],
-        vault_path: Optional[str] = None,
+        vault_path: Path | str | None = None,
     ) -> tuple[int, int]:
         """Sync applications to Obsidian vault.
 
@@ -124,8 +126,8 @@ class ObsidianVaultAdapter(KnowledgeVaultPort):
             >>> created, updated = adapter.sync_applications(apps)
             >>> print(f"Created: {created}, Updated: {updated}")
         """
-        if vault_path:
-            self.vault_path = Path(vault_path)
+        if vault_path is not None:
+            self.vault_path = Path(vault_path).expanduser()
             self._update_paths()
 
         self._ensure_directories()
@@ -142,30 +144,27 @@ class ObsidianVaultAdapter(KnowledgeVaultPort):
                 created += 1
             self._write_application_note(app, note_path)
 
-        # Update hub indexes with latest data
+        # Update hub indexes and entity hub pages with latest data
         build_companies_index(applications, self.companies_dir)
         build_skills_index(applications, self.skills_dir)
         build_portals_index(applications, self.portals_dir)
         build_status_index(applications, self.status_dir)
         create_company_hubs(applications, self.companies_dir)
         create_skill_hubs(applications, self.skills_dir)
+        create_portal_hubs(applications, self.portals_dir)
+        create_status_hubs(applications, self.status_dir)
 
         return created, updated
 
     def sync_single_application(
         self,
         application: ApplicationRecord,
-        vault_path: Optional[str] = None,
+        vault_path: Path | str | None = None,
     ) -> Path:
         """Synchronize a single application to the vault.
 
-        Creates or updates a single application note and updates relevant
-        hub indexes. More efficient than full sync when only one application
-        has changed (e.g., after a status update or new application).
-
-        Note: Hub indexes are updated with only the single application,
-        which may not reflect the full picture. Run full sync_applications()
-        periodically for accurate indexes.
+        Creates or updates a single application note without overwriting
+        global hub index files with a partial single-element list.
 
         Args:
             application: Single ApplicationRecord to synchronize
@@ -184,25 +183,23 @@ class ObsidianVaultAdapter(KnowledgeVaultPort):
             >>> note_path = adapter.sync_single_application(new_app)
             >>> print(f"Synced to: {note_path}")
         """
-        if vault_path:
-            self.vault_path = Path(vault_path)
+        if vault_path is not None:
+            self.vault_path = Path(vault_path).expanduser()
             self._update_paths()
 
         self._ensure_directories()
+        ensure_hub_directories(self)
+        create_hub_files(self)
+
         note_path = self._get_note_path(application)
         self._write_application_note(application, note_path)
-
-        # Update hub indexes
-        all_apps = [application]  # Would need full list for proper index update
-        build_companies_index(all_apps, self.companies_dir)
-        build_skills_index(all_apps, self.skills_dir)
 
         return note_path
 
     def create_hubs(
         self,
         applications: list[ApplicationRecord],
-        vault_path: Optional[str] = None,
+        vault_path: Path | str | None = None,
     ) -> int:
         """Create hub files for companies, skills, portals, and statuses.
 
@@ -225,20 +222,22 @@ class ObsidianVaultAdapter(KnowledgeVaultPort):
             >>> hub_count = adapter.create_hubs(apps)
             >>> print(f"Created/updated {hub_count} hub files")
         """
-        if vault_path:
-            self.vault_path = Path(vault_path)
+        if vault_path is not None:
+            self.vault_path = Path(vault_path).expanduser()
             self._update_paths()
 
         self._ensure_directories()
         self._create_all_hubs(applications)
 
-        # Build dynamic indexes
+        # Build dynamic indexes and entity hubs
         build_companies_index(applications, self.companies_dir)
         build_skills_index(applications, self.skills_dir)
         build_portals_index(applications, self.portals_dir)
         build_status_index(applications, self.status_dir)
         create_company_hubs(applications, self.companies_dir)
         create_skill_hubs(applications, self.skills_dir)
+        create_portal_hubs(applications, self.portals_dir)
+        create_status_hubs(applications, self.status_dir)
 
         # Count hub files created
         count = 0
@@ -250,7 +249,7 @@ class ObsidianVaultAdapter(KnowledgeVaultPort):
     def rebuild_vault(
         self,
         applications: list[ApplicationRecord],
-        vault_path: str,
+        vault_path: Path | str = "vault",
     ) -> tuple[int, int]:
         """Completely rebuild the vault from application data.
 
@@ -276,7 +275,7 @@ class ObsidianVaultAdapter(KnowledgeVaultPort):
             >>> created, updated = adapter.rebuild_vault(apps, "vault")
             >>> print(f"Full rebuild: {created} notes created")
         """
-        self.vault_path = Path(vault_path)
+        self.vault_path = Path(vault_path).expanduser()
         self._update_paths()
         self._ensure_directories()
 
@@ -411,6 +410,7 @@ class ObsidianVaultAdapter(KnowledgeVaultPort):
         for kw in app.keywords:
             status = "✅" if kw.is_matched else "❌"
             weight_label = {3: "CORE", 2: "SECONDARY", 1: "BONUS"}.get(int(kw.weight), "UNKNOWN")
-            content_lines.append(f"- {status} **{kw.keyword}** ({weight_label})")
+            safe_kw = sanitize_for_filename(kw.keyword)
+            content_lines.append(f"- {status} **[[{safe_kw}]]** ({weight_label})")
 
         note_path.write_text("\n".join(content_lines), encoding="utf-8")

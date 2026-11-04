@@ -5,9 +5,9 @@ and FuzzyCascadeMatcher for robust skill normalization.
 """
 
 import re
-from typing import Sequence
+from typing import Any, Sequence
 
-from src.config_loader import FilterConfig, TechVocabulary
+from src.config_loader import FilterConfig, TechVocabulary, normalize_tech_token
 from src.domain.models import (
     JobOffer,
     KeywordMatch,
@@ -144,15 +144,17 @@ class OfferMatcher:
     def __init__(
         self,
         config: FilterConfig,
-        repository=None,  # For BayesianScorer IDF cache
+        repository: Any = None,  # For BayesianScorer IDF cache
         use_bayesian: bool = True,
         bayesian_config: BayesianConfig | None = None,
     ) -> None:
         self._config = config
         self._use_bayesian = use_bayesian
         self._fuzzy_matcher = create_fuzzy_matcher(config.tech_vocabulary)
-        self._bayesian_scorer = None
+        self._bayesian_scorer: BayesianScorer | None = None
         self._tokenizer = TechTokenizer(config.tech_vocabulary)
+        self._candidate_skills_lower = {s.lower() for s in config.candidate_skills}
+        self._candidate_skills_norm = {normalize_tech_token(s) for s in config.candidate_skills if normalize_tech_token(s)}
 
         if use_bayesian and repository is not None:
             self._bayesian_scorer = create_bayesian_scorer(repository, bayesian_config)
@@ -195,7 +197,10 @@ class OfferMatcher:
             seen_normalized.add(normalized)
 
             weight = KeywordWeight(tm.weight)
-            is_matched = normalized.lower() in {s.lower() for s in self._config.candidate_skills}
+            is_matched = (
+                normalized.lower() in self._candidate_skills_lower
+                or normalize_tech_token(normalized) in self._candidate_skills_norm
+            )
 
             keyword_matches.append(KeywordMatch(
                 keyword=normalized,

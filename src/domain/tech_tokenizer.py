@@ -6,11 +6,14 @@ preserving special characters (+#.-) within tokens and normalizing via alias map
 """
 
 import re
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
-from typing import Optional
+from typing import Any
+
+from src.config_loader import DEFAULT_TECH_ALIASES, TechVocabulary as TechVocabulary
 
 try:
-    import ahocorasick
+    import ahocorasick  # type: ignore[import-not-found]
 except ImportError:
     ahocorasick = None
 
@@ -19,67 +22,10 @@ except ImportError:
 class TokenMatch:
     """Represents a matched technology token with metadata."""
     token: str          # Original matched text from input
-    normalized: str     # Canonical form (e.g., "c#" -> "csharp")
+    normalized: str     # Canonical form from vocabulary (e.g., "Node.js", "React")
     start: int          # Start index in source text
     end: int            # End index in source text (exclusive)
     weight: int         # 3=CORE, 2=SECONDARY, 1=BONUS
-
-
-class TechVocabulary:
-    """
-    Technology vocabulary container with weighted terms.
-
-    Expected structure:
-    - core: set[str] - High-weight technologies (weight=3)
-    - secondary: set[str] - Medium-weight technologies (weight=2)
-    - bonus: set[str] - Low-weight technologies (weight=1)
-    - multi_word: set[str] - Multi-word terms for Aho-Corasick (e.g., "rest api")
-    """
-    def __init__(
-        self,
-        core: set[str],
-        secondary: set[str],
-        bonus: set[str],
-        multi_word: set[str],
-    ) -> None:
-        self.core = {t.lower() for t in core}
-        self.secondary = {t.lower() for t in secondary}
-        self.bonus = {t.lower() for t in bonus}
-        self.multi_word = {t.lower() for t in multi_word}
-
-        # Combined lookup sets
-        self._all_single: set[str] = set()
-        self._all_single.update(self.core)
-        self._all_single.update(self.secondary)
-        self._all_single.update(self.bonus)
-
-        # Weight map for O(1) lookup
-        self._weight_map: dict[str, int] = {}
-        for term in self.core:
-            self._weight_map[term] = 3
-        for term in self.secondary:
-            self._weight_map[term] = 2
-        for term in self.bonus:
-            self._weight_map[term] = 1
-        for term in self.multi_word:
-            self._weight_map[term] = 2  # Multi-word default to SECONDARY
-
-    def get_weight(self, normalized: str) -> int:
-        """Get weight for a normalized term, defaulting to BONUS (1)."""
-        return self._weight_map.get(normalized.lower(), 1)
-
-    def is_single_word(self, term: str) -> bool:
-        """Check if term is in single-word vocabulary."""
-        return term.lower() in self._all_single
-
-    def is_multi_word(self, term: str) -> bool:
-        """Check if term is in multi-word vocabulary."""
-        return term.lower() in self.multi_word
-
-    @property
-    def all_terms(self) -> set[str]:
-        """All vocabulary terms combined."""
-        return self._all_single | self.multi_word
 
 
 class TechTokenizer:
@@ -92,7 +38,7 @@ class TechTokenizer:
     """
 
     # Regex pattern for tokenization: preserves + # . - within words
-    TOKEN_PATTERN = re.compile(r"[a-zA-Z0-9+#.\-]+")
+    TOKEN_PATTERN: re.Pattern[str] = re.compile(r"[a-zA-Z0-9+#.\-]+")
 
     def __init__(self, vocabulary: TechVocabulary) -> None:
         """
@@ -103,7 +49,14 @@ class TechTokenizer:
         """
         self.vocabulary = vocabulary
         self._alias_map: dict[str, str] = self._build_alias_map()
-        self._automaton: Optional[ahocorasick.Automaton] = None
+        self._canonical_by_norm: dict[str, str] = {}
+        for kw in self.vocabulary.get_all_keywords():
+            norm = self._normalize(kw)
+            if norm and norm not in self._canonical_by_norm:
+                self._canonical_by_norm[norm] = kw
+
+        self._multi_word_phrases: list[tuple[str, str]] = self._build_multi_word_phrases()
+        self._automaton: Any = None
         self._build_automaton()
 
     def _build_alias_map(self) -> dict[str, str]:
@@ -112,232 +65,66 @@ class TechTokenizer:
 
         Maps common variants to canonical forms.
         """
-        aliases = {
-            # C-family
-            "c#": "csharp",
-            "c sharp": "csharp",
-            "c++": "cpp",
-            "c plus plus": "cpp",
-            "c": "c",
+        return dict(DEFAULT_TECH_ALIASES)
 
-            # .NET ecosystem
-            ".net": "dotnet",
-            "dotnet": "dotnet",
-            "dot net": "dotnet",
-            "asp.net": "aspnet",
-            "aspnet": "aspnet",
-            "asp.net core": "aspnetcore",
-            "aspnetcore": "aspnetcore",
-            ".net core": "dotnetcore",
-            "dotnet core": "dotnetcore",
-            "dotnetcore": "dotnetcore",
-            ".net framework": "dotnetframework",
-            "dotnet framework": "dotnetframework",
-            "entity framework": "entityframework",
-            "entityframework": "entityframework",
-            "ef core": "efcore",
-            "efcore": "efcore",
+    def _build_multi_word_phrases(self) -> list[tuple[str, str]]:
+        """Collect multi-word and slash-separated phrases mapped to canonical vocab names."""
+        phrases: dict[str, str] = {}
+        for term in (*self.vocabulary.multi_word, *self.vocabulary.get_all_keywords()):
+            low = term.strip().lower()
+            if " " in low or "/" in low:
+                norm = self._normalize(low)
+                canonical = self._canonical_by_norm.get(norm, term)
+                phrases[low] = canonical
 
-            # JavaScript/TypeScript
-            "js": "javascript",
-            "javascript": "javascript",
-            "ecmascript": "javascript",
-            "es6": "javascript",
-            "es2015": "javascript",
-            "ts": "typescript",
-            "typescript": "typescript",
-            "node.js": "nodejs",
-            "nodejs": "nodejs",
-            "node": "nodejs",
-            "deno": "deno",
-            "bun": "bun",
+        for alias, target_norm in self._alias_map.items():
+            if (" " in alias or "/" in alias) and target_norm in self._canonical_by_norm:
+                phrases[alias] = self._canonical_by_norm[target_norm]
 
-            # Frontend frameworks
-            "react.js": "react",
-            "reactjs": "react",
-            "react": "react",
-            "next.js": "nextjs",
-            "nextjs": "nextjs",
-            "next": "nextjs",
-            "vue.js": "vue",
-            "vuejs": "vue",
-            "vue": "vue",
-            "nuxt.js": "nuxt",
-            "nuxtjs": "nuxt",
-            "svelte": "svelte",
-            "sveltekit": "sveltekit",
-            "angular": "angular",
-            "angularjs": "angularjs",
-
-            # Backend frameworks
-            "express.js": "express",
-            "expressjs": "express",
-            "express": "express",
-            "nest.js": "nestjs",
-            "nestjs": "nestjs",
-            "nest": "nestjs",
-            "fastify": "fastify",
-            "koa": "koa",
-            "hapi": "hapi",
-            "spring boot": "springboot",
-            "springboot": "springboot",
-            "spring": "spring",
-            "django": "django",
-            "flask": "flask",
-            "fastapi": "fastapi",
-            "gin": "gin",
-            "echo": "echo",
-
-            # Databases
-            "postgresql": "postgresql",
-            "postgres": "postgresql",
-            "pg": "postgresql",
-            "mysql": "mysql",
-            "mariadb": "mariadb",
-            "sqlite": "sqlite",
-            "sqlite3": "sqlite",
-            "mongodb": "mongodb",
-            "mongo": "mongodb",
-            "redis": "redis",
-            "cassandra": "cassandra",
-            "dynamodb": "dynamodb",
-            "elasticsearch": "elasticsearch",
-            "elastic": "elasticsearch",
-            "sql server": "sqlserver",
-            "sqlserver": "sqlserver",
-            "mssql": "sqlserver",
-            "oracle": "oracle",
-            "oracle db": "oracle",
-
-            # ORMs
-            "prisma": "prisma",
-            "typeorm": "typeorm",
-            "sequelize": "sequelize",
-            "knex": "knex",
-            "drizzle": "drizzle",
-            "sqlalchemy": "sqlalchemy",
-            "gorm": "gorm",
-            "hibernate": "hibernate",
-            "jpa": "jpa",
-
-            # Cloud & DevOps
-            "aws": "aws",
-            "amazon web services": "aws",
-            "azure": "azure",
-            "gcp": "gcp",
-            "google cloud": "gcp",
-            "google cloud platform": "gcp",
-            "docker": "docker",
-            "kubernetes": "kubernetes",
-            "k8s": "kubernetes",
-            "terraform": "terraform",
-            "ansible": "ansible",
-            "jenkins": "jenkins",
-            "github actions": "githubactions",
-            "githubactions": "githubactions",
-            "gitlab ci": "gitlabci",
-            "gitlabci": "gitlabci",
-            "circleci": "circleci",
-            "travis": "travis",
-            "travis ci": "travis",
-
-            # APIs & Protocols
-            "rest api": "restapi",
-            "restapi": "restapi",
-            "rest": "restapi",
-            "graphql": "graphql",
-            "grpc": "grpc",
-            "websocket": "websocket",
-            "websockets": "websocket",
-            "api": "api",
-
-            # Testing
-            "jest": "jest",
-            "vitest": "vitest",
-            "mocha": "mocha",
-            "chai": "chai",
-            "cypress": "cypress",
-            "playwright": "playwright",
-            "selenium": "selenium",
-            "pytest": "pytest",
-            "junit": "junit",
-            "testng": "testng",
-
-            # Other tools
-            "git": "git",
-            "github": "github",
-            "gitlab": "gitlab",
-            "bitbucket": "bitbucket",
-            "linux": "linux",
-            "unix": "unix",
-            "bash": "bash",
-            "shell": "shell",
-            "ci/cd": "cicd",
-            "cicd": "cicd",
-            "ci cd": "cicd",
-            "tailwind": "tailwind",
-            "tailwind css": "tailwind",
-            "bootstrap": "bootstrap",
-            "sass": "sass",
-            "scss": "sass",
-            "less": "less",
-            "webpack": "webpack",
-            "vite": "vite",
-            "rollup": "rollup",
-            "esbuild": "esbuild",
-            "babel": "babel",
-            "eslint": "eslint",
-            "prettier": "prettier",
-            "typescript": "typescript",
-            "ts-node": "tsnode",
-            "tsnode": "tsnode",
-            "nodemon": "nodemon",
-            "pm2": "pm2",
-            "nginx": "nginx",
-            "apache": "apache",
-            "varnish": "varnish",
-            "haproxy": "haproxy",
-        }
-        return aliases
+        return list(phrases.items())
 
     def _build_automaton(self) -> None:
         """Build Aho-Corasick automaton for multi-word term matching."""
-        if ahocorasick is None:
+        if ahocorasick is None or not self._multi_word_phrases:
             self._automaton = None
             return
 
-        self._automaton = ahocorasick.Automaton()
+        automaton = ahocorasick.Automaton()
 
-        # Add all multi-word terms to automaton
-        for term in self.vocabulary.multi_word:
-            normalized = self._normalize(term)
-            # Store both original and normalized for matching
-            self._automaton.add_word(term, (term, normalized))
+        for phrase_lower, canonical in self._multi_word_phrases:
+            automaton.add_word(phrase_lower, (phrase_lower, canonical))
 
-        self._automaton.make_automaton()
+        automaton.make_automaton()
+        self._automaton = automaton
 
     def _normalize(self, token: str) -> str:
         """
-        Normalize a token using the alias map.
+        Normalize a token using the alias map after stripping boundary punctuation.
 
         Args:
             token: Raw token to normalize
 
         Returns:
-            Canonical form of the token
+            Canonical normalized key of the token
         """
-        lower = token.lower().strip()
-        return self._alias_map.get(lower, lower)
+        lower = token.strip().lower()
+        if lower.startswith(".net"):
+            cleaned = lower.rstrip(".-")
+        else:
+            cleaned = lower.strip(".-")
+        if not cleaned:
+            return ""
+        return self._alias_map.get(cleaned, cleaned)
 
     def _get_weight(self, normalized: str) -> int:
         """Get weight for a normalized token."""
-        return self.vocabulary.get_weight(normalized)
+        return int(self.vocabulary.get_weight(normalized))
 
     def tokenize(self, text: str) -> list[TokenMatch]:
         """
         Single-pass tokenization of input text.
 
-        Uses hash lookup for single-word tokens and Aho-Corasick
+        Uses hash lookup for single-word tokens and Aho-Corasick (or substring fallback)
         for multi-word terms. Preserves technology characters (+#.-).
 
         Args:
@@ -352,42 +139,71 @@ class TechTokenizer:
         matches: list[TokenMatch] = []
         text_lower = text.lower()
 
-        # 1. Aho-Corasick multi-word matching (if available)
+        # 1. Multi-word matching via Aho-Corasick or clean fallback
         if self._automaton is not None:
-            for end_idx, (original, normalized) in self._automaton.iter(text_lower):
-                start_idx = end_idx - len(original) + 1
-                # Verify word boundaries
+            for end_idx, (phrase_lower, canonical) in self._automaton.iter(text_lower):
+                start_idx = end_idx - len(phrase_lower) + 1
                 if self._is_word_boundary(text_lower, start_idx, end_idx + 1):
-                    weight = self._get_weight(normalized)
+                    weight = self._get_weight(canonical)
                     matches.append(TokenMatch(
                         token=text[start_idx:end_idx + 1],
-                        normalized=normalized,
+                        normalized=canonical,
                         start=start_idx,
                         end=end_idx + 1,
                         weight=weight,
                     ))
+        else:
+            for phrase_lower, canonical in self._multi_word_phrases:
+                search_start = 0
+                phrase_len = len(phrase_lower)
+                while True:
+                    idx = text_lower.find(phrase_lower, search_start)
+                    if idx == -1:
+                        break
+                    end_pos = idx + phrase_len
+                    if self._is_word_boundary(text_lower, idx, end_pos):
+                        weight = self._get_weight(canonical)
+                        matches.append(TokenMatch(
+                            token=text[idx:end_pos],
+                            normalized=canonical,
+                            start=idx,
+                            end=end_pos,
+                            weight=weight,
+                        ))
+                    search_start = idx + 1
 
         # 2. Single-pass tokenization for single-word terms
-        # Use regex to find all tokens preserving +#.-
         for match in self.TOKEN_PATTERN.finditer(text):
-            token = match.group()
+            raw_token = match.group()
             start = match.start()
-            end = match.end()
 
-            # Normalize and check vocabulary
-            normalized = self._normalize(token)
+            if raw_token.lower().startswith(".net"):
+                cleaned_token = raw_token.rstrip(".-")
+                lead_trimmed = 0
+            else:
+                stripped_left = raw_token.lstrip(".-")
+                lead_trimmed = len(raw_token) - len(stripped_left)
+                cleaned_token = stripped_left.rstrip(".-")
 
-            if self.vocabulary.is_single_word(normalized):
-                weight = self._get_weight(normalized)
+            if not cleaned_token:
+                continue
+
+            adj_start = start + lead_trimmed
+            adj_end = adj_start + len(cleaned_token)
+
+            norm = self._normalize(cleaned_token)
+            if norm in self._canonical_by_norm:
+                canonical = self._canonical_by_norm[norm]
+                weight = self._get_weight(canonical)
                 matches.append(TokenMatch(
-                    token=token,
-                    normalized=normalized,
-                    start=start,
-                    end=end,
+                    token=cleaned_token,
+                    normalized=canonical,
+                    start=adj_start,
+                    end=adj_end,
                     weight=weight,
                 ))
 
-        # 3. Deduplicate overlapping matches (keep highest weight)
+        # 3. Deduplicate overlapping matches (keep highest weight / longest span)
         matches = self._deduplicate_matches(matches)
 
         # 4. Sort by position
@@ -434,8 +250,8 @@ class TechTokenizer:
         if not matches:
             return []
 
-        # Sort by start, then by weight descending
-        matches.sort(key=lambda m: (m.start, -m.weight, m.end))
+        # Sort by start, then by weight descending, then by span length descending
+        matches.sort(key=lambda m: (m.start, -m.weight, -m.end))
 
         result: list[TokenMatch] = []
         last_end = -1
@@ -463,7 +279,7 @@ class TechTokenizer:
         """
         matches = self.tokenize(text)
 
-        result = {
+        result: dict[str, list[TokenMatch]] = {
             "core": [],
             "secondary": [],
             "bonus": [],
@@ -493,23 +309,15 @@ class TechTokenizer:
         return {m.normalized for m in matches}
 
 
-def create_tech_vocabulary_from_config(config: dict) -> TechVocabulary:
+def create_tech_vocabulary_from_config(config: dict[str, Any]) -> TechVocabulary:
     """
     Factory function to create TechVocabulary from config dictionary.
-
-    Expected config structure:
-    {
-        "core": ["React", "Node.js", "TypeScript", ...],
-        "secondary": ["Docker", "AWS", "GraphQL", ...],
-        "bonus": ["Git", "Linux", "CI/CD", ...],
-        "multi_word": ["rest api", "amazon web services", ...]
-    }
     """
     return TechVocabulary(
-        core=set(config.get("core", [])),
-        secondary=set(config.get("secondary", [])),
-        bonus=set(config.get("bonus", [])),
-        multi_word=set(config.get("multi_word", [])),
+        core=tuple(config.get("core", ())),
+        secondary=tuple(config.get("secondary", ())),
+        bonus=tuple(config.get("bonus", ())),
+        multi_word=tuple(config.get("multi_word", ())),
     )
 
 
@@ -517,24 +325,24 @@ def create_tech_vocabulary_from_config(config: dict) -> TechVocabulary:
 if __name__ == "__main__":
     # Default vocabulary matching config/filters.yaml
     default_vocab = TechVocabulary(
-        core={
+        core=(
             "react", "nodejs", "nestjs", "typescript", "javascript",
             "postgresql", "nextjs", "express",
-        },
-        secondary={
+        ),
+        secondary=(
             "sql", "prisma", "typeorm", "docker", "git", "restapi",
             "graphql", "jest", "testing", "aws", "linux", "cicd",
             "redis", "tailwind",
-        },
-        bonus={
+        ),
+        bonus=(
             "html", "css", "sass", "webpack", "vite", "eslint",
             "prettier", "github", "gitlab", "nginx", "apache",
-        },
-        multi_word={
+        ),
+        multi_word=(
             "rest api", "restapi", "amazon web services", "google cloud platform",
             "github actions", "gitlab ci", "ci cd", "ci/cd", "sql server",
             "visual studio code", "vs code", "visual studio",
-        },
+        ),
     )
 
     tokenizer = TechTokenizer(default_vocab)

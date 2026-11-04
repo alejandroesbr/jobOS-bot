@@ -10,7 +10,6 @@ from src.domain.text_normalizer import (
     build_dedup_key,
     normalize_canonical_url,
     normalize_company_name,
-    normalize_form_question,
     normalize_job_title,
 )
 
@@ -67,12 +66,6 @@ def test_normalize_canonical_url_preserves_only_jk_param_on_indeed() -> None:
     raw_url = "http://co.indeed.com/viewjob?jk=9f8e7d6c&tk=1h2j3k&from=serp"
     result = normalize_canonical_url(raw_url)
     assert result == "https://co.indeed.com/viewjob?jk=9f8e7d6c"
-
-
-def test_normalize_form_question_removes_punctuation_and_unifies_tech_terms() -> None:
-    raw_label = "* ¿Cuántos años de experiencia tienes trabajando con React.js? (Obligatorio) :"
-    result = normalize_form_question(raw_label)
-    assert result == "cuantos anos de experiencia tienes trabajando con react"
 
 
 def test_application_status_allows_reapplication_only_for_active_non_terminal_states() -> None:

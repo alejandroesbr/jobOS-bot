@@ -12,17 +12,17 @@ The handler coordinates:
 All operations are wrapped in error handling to ensure graceful degradation
 (one portal failure doesn't stop the entire scan).
 """
+from pathlib import Path
 import time
 import uuid
-from dataclasses import dataclass
+from typing import Callable, cast
 
-from src.adapters.scrapers.orchestrator import WorkerResult
 from src.application.commands import ScanPortalsCommand, ScanPortalsResult
-from src.config_loader import FilterConfig
+from src.config_loader import FilterConfig, load_filter_config
 from src.domain.matcher import OfferMatcher
 from src.domain.models import JobOffer, MatchEvaluation, PortalName
 from src.ports.repository_port import ApplicationRepositoryPort
-from src.ports.scraper_port import MultiPortalScraperPort
+from src.ports.scraper_port import MultiPortalScraperPort, PortalScanResult
 from src.ports.vault_port import KnowledgeVaultPort
 
 
@@ -83,7 +83,7 @@ class ScanPortalsHandler:
         self._repository = repository
         self._scraper = scraper
         self._vault = vault
-        self._matcher = OfferMatcher(FilterConfig)  # Will be initialized with config in handle
+        self._matcher: OfferMatcher | None = None
 
     def handle(self, command: ScanPortalsCommand) -> ScanPortalsResult:
         """Execute the scan portals command.
@@ -133,29 +133,53 @@ class ScanPortalsHandler:
         """
         start_time = time.perf_counter()
 
-        # Initialize matcher with config
-        matcher = OfferMatcher(command.config)
+        # Load config if not provided and initialize matcher
+        config: FilterConfig = command.config if command.config is not None else load_filter_config()
+        matcher = OfferMatcher(config, repository=self._repository)
+        self._matcher = matcher
 
         # Generate session ID for tracking
-        session_id = str(uuid.uuid4())[:8]
+        _session_id = str(uuid.uuid4())[:8]
 
         # Run concurrent scan via orchestrator
-        storage_state_path = None
+        storage_state_path: Path | None = None
         try:
-            from pathlib import Path
             default_state = Path("data/storage_state.json")
             if default_state.is_file():
                 storage_state_path = default_state
         except Exception:
             pass
 
-        worker_results: dict[PortalName, WorkerResult] = self._scraper.run_scan(
-            portals=command.portals,
-            config=command.config,
-            headless=command.headless,
-            limit_per_portal=command.limit_per_portal,
-            storage_state_path=storage_state_path,
-        )
+        scraper_dict = getattr(self._scraper, "__dict__", {})
+        worker_results: dict[PortalName, PortalScanResult]
+        if "scan_all" in scraper_dict:
+            worker_results = self._scraper.scan_all(
+                portals=command.portals,
+                config=config,
+                limit_per_portal=command.limit_per_portal,
+                max_workers=command.max_workers,
+                headless=command.headless,
+            )
+        elif "run_scan" in scraper_dict or hasattr(type(self._scraper), "run_scan"):
+            run_scan_fn = cast(
+                Callable[..., dict[PortalName, PortalScanResult]],
+                getattr(self._scraper, "run_scan"),
+            )
+            worker_results = run_scan_fn(
+                portals=command.portals,
+                config=config,
+                headless=command.headless,
+                limit_per_portal=command.limit_per_portal,
+                storage_state_path=storage_state_path,
+            )
+        else:
+            worker_results = self._scraper.scan_all(
+                portals=command.portals,
+                config=config,
+                limit_per_portal=command.limit_per_portal,
+                max_workers=command.max_workers,
+                headless=command.headless,
+            )
 
         # Process results: match, filter, persist
         total_scanned = 0
@@ -195,7 +219,7 @@ class ScanPortalsHandler:
                     record, was_new = self._repository.record_submission(
                         offer=offer,
                         evaluation=evaluation,
-                        cooldown_days=command.config.matching.cooldown_days,
+                        cooldown_days=config.matching.reapply_cooldown_days,
                     )
                     if was_new:
                         if record.times_applied == 1:
@@ -212,11 +236,13 @@ class ScanPortalsHandler:
         obsidian_updated = 0
         obsidian_synced = False
 
-        if command.sync_obsidian and self._vault and matched_offers:
+        if command.sync_obsidian and self._vault is not None:
             try:
                 # Get all applications for sync
                 all_apps = self._repository.find_all(limit=10000)
-                created, updated = self._vault.sync_applications(all_apps, command.vault_path)
+                vault_dir = Path(command.vault_path)
+                created, updated = self._vault.sync_applications(all_apps, vault_dir)
+                self._vault.create_hubs(all_apps, vault_dir)
                 obsidian_created = created
                 obsidian_updated = updated
                 obsidian_synced = True

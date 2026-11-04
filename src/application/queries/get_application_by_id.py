@@ -43,3 +43,4 @@ class GetApplicationByIdResult:
         ...     print("Application not found")
     """
     application: Optional[ApplicationRecord]
+    execution_time_ms: int = 0

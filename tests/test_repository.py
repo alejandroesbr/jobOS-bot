@@ -3,14 +3,12 @@ import pytest
 
 from src.adapters.db.repository import ApplicationRepository
 from src.domain.models import (
-    AnswerSource,
     ApplicationStatus,
     JobOffer,
     KeywordMatch,
     KeywordWeight,
     MatchEvaluation,
     PortalName,
-    QuestionCategory,
     WorkModality,
 )
 
@@ -203,34 +201,6 @@ def test_keyword_stats_aggregates_unique_jobs_not_reapplication_count(
     assert stats_dict["PostgreSQL"] == 1
 
 
-def test_qa_memory_upsert_and_retrieve(repo: ApplicationRepository) -> None:
-    repo.upsert_qa_memory(
-        question_norm="cuantos anos de experiencia tienes con react",
-        raw_example="¿Cuántos años de experiencia tienes con React?",
-        answer="2 años desarrollando proyectos full stack",
-        category=QuestionCategory.EXPERIENCE,
-        source=AnswerSource.PROFILE_SEED,
-    )
-
-    all_qa = repo.get_all_qa_memory()
-    assert len(all_qa) == 1
-    assert all_qa[0][0] == "cuantos anos de experiencia tienes con react"
-    assert all_qa[0][2] == "2 años desarrollando proyectos full stack"
-
-    # Update with confirmed answer
-    repo.upsert_qa_memory(
-        question_norm="cuantos anos de experiencia tienes con react",
-        raw_example="Años de experiencia con React.js:",
-        answer="3 años demostrables en portafolio y proyectos",
-        category=QuestionCategory.EXPERIENCE,
-        source=AnswerSource.USER_CONFIRMED,
-    )
-
-    updated_qa = repo.get_all_qa_memory()
-    assert len(updated_qa) == 1
-    assert updated_qa[0][2] == "3 años demostrables en portafolio y proyectos"
-
-
 def test_insert_or_ignore_keywords_does_not_raise_on_duplicate_association(
     repo: ApplicationRepository,
 ) -> None:
@@ -255,4 +225,45 @@ def test_insert_or_ignore_keywords_does_not_raise_on_duplicate_association(
     assert reapplied_record.times_applied == 2
     # Keywords are still cleanly intact without exceptions
     assert len(reapplied_record.keywords) == 4
+
+
+def test_existing_db_migration_adds_and_backfills_company_and_title_norm() -> None:
+    import sqlite3
+
+    conn = sqlite3.connect(":memory:")
+    # Simulate an older DB table without company_norm / title_norm
+    conn.execute(
+        """
+        CREATE TABLE applications (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            dedup_key TEXT NOT NULL UNIQUE,
+            title TEXT NOT NULL,
+            company TEXT NOT NULL,
+            location TEXT NOT NULL,
+            modality TEXT NOT NULL,
+            description TEXT NOT NULL,
+            match_score INTEGER NOT NULL,
+            times_applied INTEGER NOT NULL DEFAULT 0,
+            status TEXT NOT NULL DEFAULT 'Pendiente',
+            notion_page_id TEXT UNIQUE,
+            first_applied_at TEXT,
+            last_applied_at TEXT,
+            created_at TEXT NOT NULL DEFAULT '2026-11-01T00:00:00Z',
+            updated_at TEXT NOT NULL DEFAULT '2026-11-01T00:00:00Z'
+        );
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO applications (dedup_key, title, company, location, modality, description, match_score)
+        VALUES ('techcorp::backend dev', 'Backend Dev', 'TechCorp S.A.S.', 'Remoto', 'remote', 'Python', 85);
+        """
+    )
+
+    migrated_repo = ApplicationRepository(conn)
+    records = migrated_repo.find_all()
+    assert len(records) == 1
+    assert records[0].company == "TechCorp S.A.S."
+    migrated_repo.close()
+
 

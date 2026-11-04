@@ -16,6 +16,7 @@ and to support Graphify's bidirectional linking structure.
 from dataclasses import dataclass
 from typing import Optional
 
+from src.adapters.obsidian.wikilinks import sanitize_for_filename, slugify
 from src.domain.models import ApplicationRecord, ApplicationStatus, PortalName, WorkModality
 
 
@@ -92,6 +93,20 @@ class ApplicationFrontmatter:
     status_link: str
 
 
+PORTAL_DISPLAY_NAMES: dict[str, str] = {
+    "linkedin": "LinkedIn",
+    "getonbrd": "GetOnBrd",
+    "computrabajo": "Computrabajo",
+    "elempleo": "Elempleo",
+    "glassdoor": "Glassdoor",
+    "indeed": "Indeed",
+}
+
+
+def format_portal_display(portal_raw: str) -> str:
+    return PORTAL_DISPLAY_NAMES.get(portal_raw.lower(), portal_raw)
+
+
 def build_frontmatter(record: ApplicationRecord, skills: list[str]) -> ApplicationFrontmatter:
     """Build frontmatter from ApplicationRecord.
 
@@ -105,17 +120,18 @@ def build_frontmatter(record: ApplicationRecord, skills: list[str]) -> Applicati
 
     Returns:
         ApplicationFrontmatter object ready for YAML serialization
-
-    Example:
-        >>> record = repo.find_by_id(1)
-        >>> matched_skills = [kw.keyword for kw in record.keywords if kw.is_matched]
-        >>> fm = build_frontmatter(record, matched_skills)
-        >>> yaml = format_yaml_frontmatter(fm)
     """
-    skill_links = [f"[[{skill}]]" for skill in skills]
+    skill_links = [f"[[{sanitize_for_filename(skill)}]]" for skill in skills]
 
     portal_value = record.submissions[0].portal.value if record.submissions else "unknown"
+    portal_display = format_portal_display(portal_value)
     url_value = record.submissions[0].canonical_url if record.submissions else ""
+    safe_company = sanitize_for_filename(record.company)
+    safe_portal = sanitize_for_filename(portal_display)
+    safe_status = sanitize_for_filename(record.status.value)
+
+    raw_tags = ["job-application", record.status.value, record.modality.value]
+    clean_tags = [slugify(tag) for tag in raw_tags if slugify(tag)]
 
     return ApplicationFrontmatter(
         id=record.id,
@@ -131,12 +147,16 @@ def build_frontmatter(record: ApplicationRecord, skills: list[str]) -> Applicati
         status=record.status.value,
         first_applied_at=record.first_applied_at,
         last_applied_at=record.last_applied_at,
-        tags=["job-application", record.status.value.lower(), record.modality.value],
-        company_link=f"[[{record.company}]]",
+        tags=clean_tags,
+        company_link=f"[[{safe_company}]]",
         skill_links=skill_links,
-        portal_link=f"[[{portal_value}]]",
-        status_link=f"[[{record.status.value}]]",
+        portal_link=f"[[{safe_portal}]]",
+        status_link=f"[[{safe_status}]]",
     )
+
+
+def _escape_yaml_str(val: str) -> str:
+    return val.replace("\\", "\\\\").replace('"', '\\"')
 
 
 def format_yaml_frontmatter(fm: ApplicationFrontmatter) -> str:
@@ -163,26 +183,29 @@ def format_yaml_frontmatter(fm: ApplicationFrontmatter) -> str:
         ...
         ---
     """
+    clean_tags = [slugify(tag) for tag in fm.tags if slugify(tag)]
+    quoted_skill_links = ", ".join(f'"{_escape_yaml_str(link)}"' for link in fm.skill_links)
+
     lines = ["---"]
     lines.append(f"id: {fm.id}")
-    lines.append(f"dedup_key: \"{fm.dedup_key}\"")
-    lines.append(f"title: \"{fm.title}\"")
-    lines.append(f"company: \"{fm.company}\"")
-    lines.append(f"location: \"{fm.location}\"")
+    lines.append(f'dedup_key: "{_escape_yaml_str(fm.dedup_key)}"')
+    lines.append(f'title: "{_escape_yaml_str(fm.title)}"')
+    lines.append(f'company: "{_escape_yaml_str(fm.company)}"')
+    lines.append(f'location: "{_escape_yaml_str(fm.location)}"')
     lines.append(f"modality: {fm.modality}")
     lines.append(f"portal: {fm.portal}")
-    lines.append(f"url: {fm.url}")
+    lines.append(f'url: "{_escape_yaml_str(fm.url)}"')
     lines.append(f"match_score: {fm.match_score}")
     lines.append(f"times_applied: {fm.times_applied}")
-    lines.append(f"status: {fm.status}")
+    lines.append(f'status: "{_escape_yaml_str(fm.status)}"')
     if fm.first_applied_at:
         lines.append(f"first_applied_at: {fm.first_applied_at}")
     if fm.last_applied_at:
         lines.append(f"last_applied_at: {fm.last_applied_at}")
-    lines.append(f"tags: [{', '.join(fm.tags)}]")
-    lines.append(f"company_link: {fm.company_link}")
-    lines.append(f"skill_links: [{', '.join(fm.skill_links)}]")
-    lines.append(f"portal_link: {fm.portal_link}")
-    lines.append(f"status_link: {fm.status_link}")
+    lines.append(f"tags: [{', '.join(clean_tags)}]")
+    lines.append(f'company_link: "{_escape_yaml_str(fm.company_link)}"')
+    lines.append(f"skill_links: [{quoted_skill_links}]")
+    lines.append(f'portal_link: "{_escape_yaml_str(fm.portal_link)}"')
+    lines.append(f'status_link: "{_escape_yaml_str(fm.status_link)}"')
     lines.append("---")
     return "\n".join(lines)

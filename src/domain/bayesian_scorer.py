@@ -12,7 +12,7 @@ probabilistic model that accounts for keyword rarity and candidate profile.
 
 import math
 from dataclasses import dataclass
-from typing import Sequence
+from typing import Any, Sequence
 
 from src.domain.models import KeywordMatch, KeywordWeight
 
@@ -42,7 +42,7 @@ class KeywordStats:
 class IDFCache:
     """In-memory cache for keyword IDF values with lazy loading from DB."""
 
-    def __init__(self, repository) -> None:
+    def __init__(self, repository: Any) -> None:
         """Initialize with ApplicationRepositoryPort for DB access."""
         self._repository = repository
         self._cache: dict[str, KeywordStats] = {}
@@ -55,19 +55,24 @@ class IDFCache:
 
         try:
             stats = self._repository.get_keyword_stats()
-            for keyword, total_jobs, matched_jobs in stats:
-                # document_frequency = total_jobs (how many postings mention this)
-                # matched_jobs = how many matched applications have this
-                # total_documents = total unique job postings scanned
-                df = total_jobs
-                N = max(total_jobs, 1)  # Will be updated with actual total
-                idf = math.log(N / max(df, 1)) if df > 0 else 0.0
-                prevalence = df / N if N > 0 else 0.0
+            n_docs = 0
+            if hasattr(self._repository, "find_all"):
+                try:
+                    n_docs = len(self._repository.find_all(limit=100000))
+                except Exception:
+                    n_docs = 0
+            max_df = max(( int(total_jobs) for _, total_jobs, _ in stats), default=0)
+            n_total = max(n_docs, max_df, 1)
+
+            for keyword, total_jobs, _matched_jobs in stats:
+                df = max(int(total_jobs), 0)
+                idf = math.log((n_total + 1.0) / (1.0 + df)) + 1.0
+                prevalence = df / n_total if n_total > 0 else 0.0
 
                 self._cache[keyword.lower()] = KeywordStats(
                     keyword=keyword,
                     document_frequency=df,
-                    total_documents=N,
+                    total_documents=n_total,
                     inverse_document_frequency=idf,
                     market_prevalence=prevalence,
                 )
@@ -144,7 +149,7 @@ class BayesianScorer:
     def score_keywords(
         self,
         keywords: Sequence[KeywordMatch],
-        candidate_skills: set[str] | None = None,
+        candidate_skills: set[str] | frozenset[str] | None = None,
     ) -> BayesianScoreResult:
         """Score a set of keyword matches using Bayesian inference.
 
@@ -231,33 +236,11 @@ class BayesianScorer:
     def _adjust_prior_for_candidate(
         self,
         keywords: Sequence[KeywordMatch],
-        candidate_skills: set[str] | None,
+        candidate_skills: set[str] | frozenset[str] | None,
     ) -> tuple[float, float]:
-        """Adjust Dirichlet prior based on candidate's known skills."""
-        if not candidate_skills:
-            return self.config.prior_alpha, self.config.prior_beta
-
-        # Count how many of the required keywords candidate possesses
-        required_keywords = {kw.keyword.lower() for kw in keywords}
-        candidate_lower = {s.lower() for s in candidate_skills}
-        overlap = len(required_keywords & candidate_lower)
-        total_required = len(required_keywords)
-
-        if total_required == 0:
-            return self.config.prior_alpha, self.config.prior_beta
-
-        # Candidate coverage ratio
-        coverage = overlap / total_required
-
-        # Boost prior alpha proportionally to coverage
-        # Max boost: double the prior strength at 100% coverage
-        alpha_boost = self.config.prior_alpha * coverage
-        beta_boost = self.config.prior_beta * (1.0 - coverage) * 0.5  # Less penalty for missing
-
-        return (
-            self.config.prior_alpha + alpha_boost,
-            self.config.prior_beta + beta_boost,
-        )
+        """Return Dirichlet prior without double-counting offer likelihood evidence."""
+        _ = (keywords, candidate_skills)
+        return self.config.prior_alpha, self.config.prior_beta
 
     def _beta_confidence_interval(
         self,
@@ -290,7 +273,7 @@ class BayesianScorer:
 
 
 def create_bayesian_scorer(
-    repository,
+    repository: Any,
     config: BayesianConfig | None = None,
 ) -> BayesianScorer:
     """Factory function to create BayesianScorer with DB-backed IDF cache."""

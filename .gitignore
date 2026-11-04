@@ -16,6 +16,7 @@ config/profile.yaml
 config/cv_base.md
 
 # Generated outputs
+vault/
 interviews/
 followups/
 exports/

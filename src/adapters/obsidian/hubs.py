@@ -12,8 +12,13 @@ All hubs use YAML frontmatter with tags for categorization and wikilinks
 for bidirectional navigation. The structure enables graph visualization
 and filtered views in Obsidian.
 """
+from collections import Counter, defaultdict
 from pathlib import Path
 from typing import TYPE_CHECKING
+
+from src.adapters.obsidian.frontmatter import format_portal_display
+from src.adapters.obsidian.wikilinks import sanitize_for_filename, slugify
+from src.domain.models import ApplicationStatus, PortalName
 
 if TYPE_CHECKING:
     from src.adapters.obsidian.adapter import ObsidianVaultAdapter
@@ -137,6 +142,10 @@ def ensure_hub_directories(adapter: "ObsidianVaultAdapter") -> None:
         hub_dir.mkdir(parents=True, exist_ok=True)
 
 
+def _get_app_note_name(app: "ApplicationRecord") -> str:
+    return sanitize_for_filename(app.dedup_key.replace("::", "_"))
+
+
 def build_companies_index(applications: list["ApplicationRecord"], companies_dir: Path) -> None:
     """Build company index page with links to all companies.
 
@@ -166,7 +175,8 @@ def build_companies_index(applications: list["ApplicationRecord"], companies_dir
         "",
     ]
     for company in companies:
-        lines.append(f"- [[{company}]]")
+        safe_company = sanitize_for_filename(company)
+        lines.append(f"- [[{safe_company}]]")
     lines.append("")
 
     index_path = companies_dir / "index.md"
@@ -187,9 +197,7 @@ def build_skills_index(applications: list["ApplicationRecord"], skills_dir: Path
         >>> apps = repo.find_all(limit=1000)
         >>> build_skills_index(apps, Path("vault/skills"))
     """
-    from collections import Counter
-
-    skill_counts = Counter()
+    skill_counts: Counter[str] = Counter()
     for app in applications:
         for kw in app.keywords:
             skill_counts[kw.keyword] += 1
@@ -210,7 +218,8 @@ def build_skills_index(applications: list["ApplicationRecord"], skills_dir: Path
         "",
     ]
     for skill, count in sorted_skills:
-        lines.append(f"- [[{skill}]] — {count} ofertas")
+        safe_skill = sanitize_for_filename(skill)
+        lines.append(f"- [[{safe_skill}]] — {count} ofertas")
 
     index_path = skills_dir / "index.md"
     index_path.write_text("\n".join(lines), encoding="utf-8")
@@ -230,7 +239,9 @@ def build_portals_index(applications: list["ApplicationRecord"], portals_dir: Pa
         >>> apps = repo.find_all(limit=1000)
         >>> build_portals_index(apps, Path("vault/portals"))
     """
-    portals = sorted({app.submissions[0].portal.value for app in applications if app.submissions})
+    portals = sorted({format_portal_display(app.submissions[0].portal.value) for app in applications if app.submissions})
+    if not portals:
+        portals = [format_portal_display(p.value) for p in PortalName]
 
     lines = [
         "---",
@@ -245,7 +256,8 @@ def build_portals_index(applications: list["ApplicationRecord"], portals_dir: Pa
         "",
     ]
     for portal in portals:
-        lines.append(f"- [[{portal}]]")
+        safe_portal = sanitize_for_filename(portal)
+        lines.append(f"- [[{safe_portal}]]")
 
     index_path = portals_dir / "index.md"
     index_path.write_text("\n".join(lines), encoding="utf-8")
@@ -266,8 +278,6 @@ def build_status_index(applications: list["ApplicationRecord"], status_dir: Path
         >>> apps = repo.find_all(limit=1000)
         >>> build_status_index(apps, Path("vault/status"))
     """
-    from src.domain.models import ApplicationStatus
-
     lines = [
         "---",
         "tags: [hub, status]",
@@ -281,7 +291,8 @@ def build_status_index(applications: list["ApplicationRecord"], status_dir: Path
         "",
     ]
     for status in ApplicationStatus:
-        lines.append(f"- [[{status.value}]]")
+        safe_status = sanitize_for_filename(status.value)
+        lines.append(f"- [[{safe_status}]]")
 
     index_path = status_dir / "index.md"
     index_path.write_text("\n".join(lines), encoding="utf-8")
@@ -305,10 +316,11 @@ def create_company_hubs(applications: list["ApplicationRecord"], companies_dir: 
 
     for company in companies:
         company_apps = [app for app in applications if app.company == company]
+        company_tag = slugify(company) or "empresa"
 
         lines = [
             "---",
-            f"tags: [company, {company.lower()}]",
+            f"tags: [company, {company_tag}]",
             "---",
             "",
             f"# {company}",
@@ -320,13 +332,15 @@ def create_company_hubs(applications: list["ApplicationRecord"], companies_dir: 
         ]
 
         for app in company_apps:
-            portal = app.submissions[0].portal.value if app.submissions else "unknown"
+            portal = format_portal_display(app.submissions[0].portal.value) if app.submissions else "unknown"
+            note_name = _get_app_note_name(app)
+            safe_status = sanitize_for_filename(app.status.value)
             lines.append(
-                f"- [[{app.dedup_key.replace('::', '_').replace(' ', '-').lower()}]] — "
-                f"{app.title} ({app.match_score}%) — {portal} — [[{app.status.value}]]"
+                f"- [[{note_name}]] — "
+                f"{app.title} ({app.match_score}%) — [[{sanitize_for_filename(portal)}]] — [[{safe_status}]]"
             )
 
-        safe_name = company.replace("/", "-").replace("\\", "-")
+        safe_name = sanitize_for_filename(company)
         file_path = companies_dir / f"{safe_name}.md"
         file_path.write_text("\n".join(lines), encoding="utf-8")
 
@@ -345,17 +359,16 @@ def create_skill_hubs(applications: list["ApplicationRecord"], skills_dir: Path)
         >>> apps = repo.find_all(limit=1000)
         >>> create_skill_hubs(apps, Path("vault/skills"))
     """
-    from collections import defaultdict
-
-    skill_to_apps = defaultdict(list)
+    skill_to_apps: dict[str, list["ApplicationRecord"]] = defaultdict(list)
     for app in applications:
         for kw in app.keywords:
             skill_to_apps[kw.keyword].append(app)
 
     for skill, apps in skill_to_apps.items():
+        skill_tag = slugify(skill) or "tech"
         lines = [
             "---",
-            f"tags: [skill, {skill.lower()}]",
+            f"tags: [skill, {skill_tag}]",
             "---",
             "",
             f"# {skill}",
@@ -367,13 +380,88 @@ def create_skill_hubs(applications: list["ApplicationRecord"], skills_dir: Path)
         ]
 
         for app in apps:
-            portal = app.submissions[0].portal.value if app.submissions else "unknown"
+            portal = format_portal_display(app.submissions[0].portal.value) if app.submissions else "unknown"
             matched = "✅" if any(kw.keyword == skill and kw.is_matched for kw in app.keywords) else "❌"
+            note_name = _get_app_note_name(app)
             lines.append(
-                f"- {matched} [[{app.dedup_key.replace('::', '_').replace(' ', '-').lower()}]] — "
-                f"{app.title} @ {app.company} ({app.match_score}%) — {portal}"
+                f"- {matched} [[{note_name}]] — "
+                f"{app.title} @ [[{sanitize_for_filename(app.company)}]] ({app.match_score}%) — [[{sanitize_for_filename(portal)}]]"
             )
 
-        safe_name = skill.replace("/", "-").replace("\\", "-").replace("#", "sharp").replace("+", "plus")
+        safe_name = sanitize_for_filename(skill)
         file_path = skills_dir / f"{safe_name}.md"
+        file_path.write_text("\n".join(lines), encoding="utf-8")
+
+
+def create_portal_hubs(applications: list["ApplicationRecord"], portals_dir: Path) -> None:
+    """Create individual portal hub pages in vault/portals/<portal>.md."""
+    portal_to_apps: dict[str, list["ApplicationRecord"]] = defaultdict(list)
+    for portal_enum in PortalName:
+        portal_to_apps[format_portal_display(portal_enum.value)] = []
+
+    for app in applications:
+        portal_val = format_portal_display(app.submissions[0].portal.value) if app.submissions else "unknown"
+        portal_to_apps[portal_val].append(app)
+
+    for portal_name, apps in portal_to_apps.items():
+        if not apps and portal_name == "unknown":
+            continue
+        portal_tag = slugify(portal_name) or "portal"
+        lines = [
+            "---",
+            f"tags: [portal, {portal_tag}]",
+            "---",
+            "",
+            f"# Portal: {portal_name}",
+            "",
+            f"**Total vacantes:** {len(apps)}",
+            "",
+            "## Vacantes Rastreadas",
+            "",
+        ]
+        for app in apps:
+            note_name = _get_app_note_name(app)
+            safe_status = sanitize_for_filename(app.status.value)
+            lines.append(
+                f"- [[{note_name}]] — {app.title} @ [[{sanitize_for_filename(app.company)}]] "
+                f"({app.match_score}%) — [[{safe_status}]]"
+            )
+
+        safe_name = sanitize_for_filename(portal_name)
+        file_path = portals_dir / f"{safe_name}.md"
+        file_path.write_text("\n".join(lines), encoding="utf-8")
+
+
+def create_status_hubs(applications: list["ApplicationRecord"], status_dir: Path) -> None:
+    """Create individual status hub pages in vault/status/<status>.md."""
+    status_to_apps: dict[str, list["ApplicationRecord"]] = {
+        status.value: [] for status in ApplicationStatus
+    }
+    for app in applications:
+        status_to_apps.setdefault(app.status.value, []).append(app)
+
+    for status_name, apps in status_to_apps.items():
+        status_tag = slugify(status_name) or "status"
+        lines = [
+            "---",
+            f"tags: [status, {status_tag}]",
+            "---",
+            "",
+            f"# Estado: {status_name}",
+            "",
+            f"**Total vacantes:** {len(apps)}",
+            "",
+            "## Vacantes en este Estado",
+            "",
+        ]
+        for app in apps:
+            note_name = _get_app_note_name(app)
+            portal = format_portal_display(app.submissions[0].portal.value) if app.submissions else "unknown"
+            lines.append(
+                f"- [[{note_name}]] — {app.title} @ [[{sanitize_for_filename(app.company)}]] "
+                f"({app.match_score}%) — [[{sanitize_for_filename(portal)}]]"
+            )
+
+        safe_name = sanitize_for_filename(status_name)
+        file_path = status_dir / f"{safe_name}.md"
         file_path.write_text("\n".join(lines), encoding="utf-8")

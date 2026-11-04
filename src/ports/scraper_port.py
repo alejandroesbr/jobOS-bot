@@ -16,7 +16,10 @@ enabling:
 """
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Callable, Optional
+
+from playwright.sync_api import Page
 
 from src.config_loader import FilterConfig
 from src.domain.models import JobOffer, PortalName
@@ -33,6 +36,7 @@ class PortalScanResult:
         portal: The portal that was scanned
         offers: Tuple of JobOffer objects found (empty if error or no matches)
         error_message: Error description if scan failed, None if successful
+        execution_time_ms: Total execution time in milliseconds
 
     Example:
         >>> result = PortalScanResult(
@@ -45,6 +49,7 @@ class PortalScanResult:
     portal: PortalName
     offers: tuple[JobOffer, ...] = ()
     error_message: Optional[str] = None
+    execution_time_ms: int = 0
 
 
 class PortalScraperPort(ABC):
@@ -62,36 +67,26 @@ class PortalScraperPort(ABC):
 
     Attributes:
         portal_name: The PortalName enum value this scraper handles
-
-    Example:
-        >>> scraper = LinkedInScraper()
-        >>> result = scraper.scan(config, limit_per_portal=10, headless=True)
-        >>> for offer in result.offers:
-        ...     print(f"{offer.title} @ {offer.company}")
     """
 
     @property
     @abstractmethod
-    def portal_name(self) -> PortalName:
-        """Return the portal this scraper handles.
-
-        Returns:
-            PortalName enum value identifying the portal (e.g., PortalName.LINKEDIN)
-
-        Example:
-            >>> scraper = LinkedInScraper()
-            >>> assert scraper.portal_name == PortalName.LINKEDIN
-        """
+    def portal(self) -> PortalName:
+        """Return the portal this scraper handles."""
         ...
+
+    @property
+    def portal_name(self) -> PortalName:
+        """Return the portal this scraper handles."""
+        return self.portal
 
     @abstractmethod
     def scan(
         self,
+        page: Page,
         config: FilterConfig,
-        limit_per_portal: int = 15,
-        headless: bool = True,
-        on_offer_callback: Optional[Callable[[JobOffer], None]] = None,
-    ) -> PortalScanResult:
+        limit: int = 15,
+    ) -> list[JobOffer]:
         """Scan the portal for job offers matching the filter configuration.
 
         This is the main entry point for scraping a portal. The implementation
@@ -167,39 +162,18 @@ class MultiPortalScraperPort(ABC):
         max_workers: int = 4,
         headless: bool = True,
     ) -> dict[PortalName, PortalScanResult]:
-        """Scan multiple portals concurrently.
+        """Scan multiple portals concurrently."""
+        ...
 
-        Spawns up to max_workers concurrent workers, each with an isolated
-        browser context. Workers run independently and results are collected
-        as they complete.
-
-        Args:
-            portals: List of PortalName enums to scan (e.g., [LINKEDIN, GETONBRD])
-            config: FilterConfig shared across all portals
-            limit_per_portal: Maximum offers per individual portal (default: 15)
-            max_workers: Maximum concurrent browser contexts (default: 4).
-                Actual workers = min(max_workers, len(portals))
-            headless: Run all browsers in headless mode (default: True)
-
-        Returns:
-            Dictionary mapping PortalName to PortalScanResult.
-            Portals that failed will have error_message set and empty offers.
-
-        Raises:
-            OrchestrationError: If thread pool creation fails
-            ValueError: If portals list is empty or max_workers < 1
-
-        Example:
-            >>> from src.domain.models import PortalName
-            >>> orchestrator = MultiWorkerScraperOrchestrator(max_workers=3)
-            >>> results = orchestrator.scan_all(
-            ...     portals=[PortalName.LINKEDIN, PortalName.GETONBRD, PortalName.INDEED],
-            ...     config=config,
-            ...     limit_per_portal=20,
-            ...     max_workers=3,
-            ...     headless=True
-            ... )
-            >>> total_offers = sum(len(r.offers) for r in results.values())
-            >>> print(f"Total offers across all portals: {total_offers}")
-        """
+    @abstractmethod
+    def run_scan(
+        self,
+        portals: list[PortalName],
+        config: FilterConfig,
+        headless: bool = True,
+        limit_per_portal: int = 15,
+        on_offer_callback: Optional[Callable[[JobOffer], None]] = None,
+        storage_state_path: Optional[Path] = None,
+    ) -> dict[PortalName, PortalScanResult]:
+        """Run concurrent scan across multiple portals."""
         ...
