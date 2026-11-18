@@ -135,6 +135,9 @@ Tipos: `feat`, `fix`, `test`, `docs`, `refactor`, `chore`, `ci`. Ejemplos:
 
 Prohibido: `git push --force` (en cualquier variante), push a `main`/`develop`, commitear rutas protegidas.
 
+**Claude Code no hace `git push` nunca** (lo bloquea `.claude/hooks/guard_bash.py`): commitea en local y el
+humano sube la rama desde su terminal.
+
 ## 10. Cómo verificar (quality gates)
 
 Instalar dependencias de desarrollo (pip ≥ 25.1):

@@ -37,8 +37,10 @@ Ejemplos: `test(block-2): add failing tests for bayesian scorer`, `docs(audit): 
 
 ## Push
 
-- Solo a tu rama de trabajo: `git push -u origin <rama>`. Siempre pide confirmación (regla `ask`).
-- Prohibido: push a `main`/`develop`, cualquier `--force`/`-f`/`--force-with-lease`/`+refspec` (los bloquea el hook).
+- **Claude Code nunca ejecuta `git push`**, a ninguna rama: el hook `guard_bash.py` lo bloquea siempre
+  (también dentro de `bash -c`, `eval`, `xargs`, `env`). Al terminar, deja los commits en local y dile al
+  humano el comando exacto: `git push -u origin <rama>`.
+- Para el humano rige igual: nada de push a `main`/`develop` ni `--force` en ninguna variante.
 
 ## Merge
 

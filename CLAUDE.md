@@ -14,3 +14,4 @@ código de producción.
 - Subagentes: `test-writer`, `code-reviewer`, `security-auditor`, `schema-auditor` (`.claude/agents/`).
 - Skills: `write-block-tests`, `audit-block`, `jobos-conventions` (`.claude/skills/`).
 - No fusiona ramas: el merge a `develop` requiere veredicto `APPROVED` y aprobación del humano.
+- No hace `git push` (el hook lo bloquea): commitea en local y el humano sube la rama.
