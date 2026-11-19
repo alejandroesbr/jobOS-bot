@@ -4,6 +4,17 @@ version = "2.0.0"
 description = "Motor concurrente de inteligencia laboral con Clean Architecture, CQS, Multi-Worker Playwright, Grafo en Obsidian (Graphify) y servidor MCP On-Demand."
 requires-python = ">=3.11"
 
+# Quality tooling (owner: Claude Code). Install with: pip install --group dev  (pip >= 25.1)
+[dependency-groups]
+dev = [
+    "pytest>=8.3.0",
+    "pytest-cov>=6.0.0",
+    "mypy>=1.13.0",
+    "ruff>=0.8.0",
+    "import-linter>=2.1",
+    "types-PyYAML>=6.0.12",
+]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
@@ -15,3 +26,45 @@ strict = true
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = true
+# Hook modules live outside any package; tests import them by name.
+mypy_path = ".claude/hooks"
+explicit_package_bases = true
+
+[[tool.mypy.overrides]]
+module = ["crawlee.*", "sqlite_vec.*"]
+ignore_missing_imports = true
+
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+extend-exclude = [".agents", "data", "vault", "exports"]
+
+[tool.ruff.format]
+# Markdown docs are not code: do not reformat their Python snippets.
+exclude = ["*.md"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["src", "tests"]
+
+[tool.importlinter]
+root_packages = ["src"]
+include_external_packages = true
+
+[[tool.importlinter.contracts]]
+name = "Pure core: domain does not import adapters or I/O libraries"
+type = "forbidden"
+# Add "src.core" here once the package exists (import-linter fails on missing modules).
+source_modules = ["src.domain"]
+forbidden_modules = [
+    "src.adapters",
+    "sqlite3",
+    "httpx",
+    "playwright",
+    "crawlee",
+    "google",
+    "pydantic",
+    "mcp",
+]

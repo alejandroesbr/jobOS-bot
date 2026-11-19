@@ -1,0 +1,93 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "permissions": {
+    "deny": [
+      "Read(./.env)",
+      "Edit(./.env)",
+      "Read(./data/**)",
+      "Edit(./data/**)",
+      "Read(./config/profile.yaml)",
+      "Edit(./config/profile.yaml)",
+      "Read(./config/cv_base.md)",
+      "Edit(./config/cv_base.md)",
+      "Read(./config/*.pdf)",
+      "Edit(./config/*.pdf)"
+    ],
+    "allow": [
+      "Bash(python -m pytest)",
+      "Bash(python -m pytest *)",
+      "Bash(.venv/bin/python -m pytest)",
+      "Bash(.venv/bin/python -m pytest *)",
+      "Bash(mypy *)",
+      "Bash(.venv/bin/mypy *)",
+      "Bash(ruff *)",
+      "Bash(.venv/bin/ruff *)",
+      "Bash(lint-imports)",
+      "Bash(lint-imports *)",
+      "Bash(.venv/bin/lint-imports)",
+      "Bash(.venv/bin/lint-imports *)",
+      "Bash(git status)",
+      "Bash(git status *)",
+      "Bash(git diff)",
+      "Bash(git diff *)",
+      "Bash(git log)",
+      "Bash(git log *)",
+      "Bash(git branch)",
+      "Bash(git branch *)",
+      "Bash(git add *)",
+      "Bash(git commit *)"
+    ],
+    "ask": [
+      "Bash(git push)",
+      "Bash(git push *)",
+      "Bash(rtk git push *)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "f=\"$CLAUDE_PROJECT_DIR/.claude/hooks/guard_paths.py\"; [ -f \"$f\" ] || { echo \"hook ausente: $f (fail-closed)\" >&2; exit 2; }; exec python3 \"$f\"",
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "f=\"$CLAUDE_PROJECT_DIR/.claude/hooks/guard_bash.py\"; [ -f \"$f\" ] || { echo \"hook ausente: $f (fail-closed)\" >&2; exit 2; }; exec python3 \"$f\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "f=\"$CLAUDE_PROJECT_DIR/.claude/hooks/ruff_post_edit.py\"; [ -f \"$f\" ] || exit 0; exec python3 \"$f\"",
+            "timeout": 60
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "f=\"$CLAUDE_PROJECT_DIR/.claude/hooks/stop_gate.py\"; [ -f \"$f\" ] || exit 0; exec python3 \"$f\"",
+            "timeout": 300
+          }
+        ]
+      }
+    ]
+  }
+}

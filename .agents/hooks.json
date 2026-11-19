@@ -1,0 +1,17 @@
+{
+  "implementer-path-guard": {
+    "enabled": true,
+    "PreToolUse": [
+      {
+        "matcher": "edit_file|write_file|read_file|run_command",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ./hooks/guard_implementer.py",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}
